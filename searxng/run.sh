@@ -180,7 +180,7 @@ if "infinite_scroll" in options and options["infinite_scroll"] is not None:
 
 # Handle enabled_engines and disabled_engines from UI options
 enabled_engines = [str(e).strip() for e in (options.get("enabled_engines") or []) if str(e).strip()]
-disabled_engines = [str(e).strip() for e in (options.get("disabled_engines") or []) if str(e).strip()]
+disabled_engines = [str(e).strip() for e in (options.get("disabled_engines") or ["wikidata"]) if str(e).strip()]
 
 if enabled_engines or disabled_engines:
     engines_list = cfg.setdefault("engines", [])
@@ -227,7 +227,7 @@ print(f"INFO: Successfully updated persistent configuration at {persistent_setti
 default_presets = [
     {
         "alias": "local_news",
-        "description": "Search local Vojvodina and Subotica news in Hungarian (Pannon RTV). Automatically extracts the full text of the top 3 news articles.",
+        "description": "Get a randomized digest of 4 local Vojvodina and Subotica news stories in Hungarian (Pannon RTV) with headlines and short leads. Summarize each in 1 sentence and let the user pick one to read in detail.",
         "sites": ["pannonrtv.com", "pannonrtv.rs"],
         "default_query": "hírek vajdaság szabadka",
         "query_template": "",
@@ -235,12 +235,15 @@ default_presets = [
         "engines": "",
         "language": "hu",
         "time_range": "week",
-        "max_results": 6,
-        "fetch_top_n": 3,
+        "response_mode": "digest",
+        "shuffle_results": True,
+        "max_results": 4,
+        "digest_words": 25,
+        "fetch_top_n": 0,
     },
     {
         "alias": "it_news",
-        "description": "Search latest IT, software engineering, AI, cybersecurity, and technology news. Automatically extracts full article text for top results.",
+        "description": "Get a randomized digest of 4 latest IT, software engineering, AI, and technology news stories with headlines and short leads. Summarize each in 1 sentence and let the user pick one to explore.",
         "sites": [],
         "default_query": "technology software AI cybersecurity news",
         "query_template": "",
@@ -248,12 +251,31 @@ default_presets = [
         "engines": "",
         "language": "en",
         "time_range": "week",
-        "max_results": 8,
-        "fetch_top_n": 2,
+        "response_mode": "digest",
+        "shuffle_results": True,
+        "max_results": 4,
+        "digest_words": 25,
+        "fetch_top_n": 0,
+    },
+    {
+        "alias": "detailed_search",
+        "description": "Deep detailed search for a specific topic, news story, or question. Finds the top matching result and extracts its full article text so you can give a comprehensive answer.",
+        "sites": [],
+        "default_query": "",
+        "query_template": "",
+        "categories": "general,news",
+        "engines": "",
+        "language": "",
+        "time_range": "",
+        "response_mode": "detailed",
+        "shuffle_results": False,
+        "max_results": 3,
+        "digest_words": 35,
+        "fetch_top_n": 1,
     },
     {
         "alias": "tech_docs",
-        "description": "Search technical documentation, GitHub issues, StackOverflow, and Home Assistant guides with full-page content extraction.",
+        "description": "Detailed technical documentation search across GitHub, StackOverflow, and Home Assistant docs with full-page content extraction of the top result.",
         "sites": ["github.com", "stackoverflow.com", "docs.home-assistant.io", "community.home-assistant.io"],
         "default_query": "",
         "query_template": "",
@@ -261,8 +283,11 @@ default_presets = [
         "engines": "",
         "language": "en",
         "time_range": "",
-        "max_results": 6,
-        "fetch_top_n": 2,
+        "response_mode": "detailed",
+        "shuffle_results": False,
+        "max_results": 3,
+        "digest_words": 35,
+        "fetch_top_n": 1,
     },
 ]
 
@@ -284,6 +309,11 @@ for item in (existing_presets or default_presets):
         alias_key = str(item["alias"]).strip()
         presets_by_alias[alias_key] = copy.deepcopy(item)
 
+# Ensuredetailed_search is added if upgrading from v1.3.x
+for dp in default_presets:
+    if dp["alias"] not in presets_by_alias:
+        presets_by_alias[dp["alias"]] = copy.deepcopy(dp)
+
 # Merge presets from Home Assistant UI (options["search_presets"])
 ui_presets = options.get("search_presets")
 if isinstance(ui_presets, list) and len(ui_presets) > 0:
@@ -298,6 +328,37 @@ if isinstance(ui_presets, list) and len(ui_presets) > 0:
             sites_list = [s.strip() for s in str(raw_sites or "").split(",") if s.strip()]
 
         merged = presets_by_alias.get(alias_key, {})
+        raw_tr = str(ui_item.get("time_range") if ui_item.get("time_range") is not None else merged.get("time_range", "")).strip()
+        if raw_tr.lower() in ("any", "none", "all"):
+            raw_tr = ""
+
+        # Determine response_mode & shuffle defaults gracefully even if upgrading from v1.3.x options.json
+        default_is_news = alias_key in ("local_news", "it_news")
+        resp_mode = str(ui_item.get("response_mode") or merged.get("response_mode") or ("digest" if default_is_news else "detailed")).strip().lower()
+        if resp_mode not in ("digest", "detailed"):
+            resp_mode = "digest"
+
+        if "shuffle_results" in ui_item and ui_item["shuffle_results"] is not None:
+            shuf = bool(ui_item["shuffle_results"])
+        elif "shuffle_results" in merged:
+            shuf = bool(merged["shuffle_results"])
+        else:
+            shuf = default_is_news
+
+        if "digest_words" in ui_item and ui_item["digest_words"] is not None:
+            d_words = int(ui_item["digest_words"])
+        else:
+            d_words = int(merged.get("digest_words", 25))
+
+        if "fetch_top_n" in ui_item and ui_item["fetch_top_n"] is not None:
+            f_top = int(ui_item["fetch_top_n"])
+            # If upgrading from v1.3.x where local_news had fetch_top_n=3 and no response_mode field,
+            # respect digest mode (0 full fetches) so Voice Satellite doesn't hit 1001!
+            if "response_mode" not in ui_item and resp_mode == "digest":
+                f_top = 0
+        else:
+            f_top = 0 if resp_mode == "digest" else int(merged.get("fetch_top_n", 1))
+
         merged.update({
             "alias": alias_key,
             "description": str(ui_item.get("description") or merged.get("description") or f"Preconfigured search preset '{alias_key}'"),
@@ -307,9 +368,12 @@ if isinstance(ui_presets, list) and len(ui_presets) > 0:
             "categories": str(ui_item.get("categories") if ui_item.get("categories") is not None else merged.get("categories", "general")),
             "engines": str(ui_item.get("engines") if ui_item.get("engines") is not None else merged.get("engines", "")),
             "language": str(ui_item.get("language") if ui_item.get("language") is not None else merged.get("language", "")),
-            "time_range": "" if str(ui_item.get("time_range") or "").strip().lower() in ("any", "none", "all") else str(ui_item.get("time_range") if ui_item.get("time_range") is not None else merged.get("time_range", "")),
-            "max_results": int(ui_item.get("max_results") if ui_item.get("max_results") is not None else merged.get("max_results", 6)),
-            "fetch_top_n": int(ui_item.get("fetch_top_n") if ui_item.get("fetch_top_n") is not None else merged.get("fetch_top_n", 2)),
+            "time_range": raw_tr,
+            "response_mode": resp_mode,
+            "shuffle_results": shuf,
+            "max_results": int(ui_item.get("max_results") if ui_item.get("max_results") is not None else merged.get("max_results", 4)),
+            "digest_words": d_words,
+            "fetch_top_n": f_top,
         })
         presets_by_alias[alias_key] = merged
 
@@ -320,7 +384,7 @@ if not presets_by_alias:
 presets_header = (
     "# SearXNG MCP Preconfigured Search Tasks & Aliases (Presets)\n"
     "# Located at /addon_configs/<repo>_searxng/presets.yml (inside container: /config/presets.yml)\n"
-    "# Each preset here is automatically exposed as a dedicated MCP tool (e.g. search_local_news, search_it_news)\n"
+    "# Each preset here is automatically exposed as a dedicated MCP tool (e.g. search_local_news, search_detailed_search)\n"
     "# AND can be edited live without restarting the add-on!\n\n"
 )
 
@@ -341,15 +405,16 @@ echo "INFO: Linked $SETTINGS_PATH -> $PERSISTENT_SETTINGS"
 
 # Check if built-in MCP server is enabled (default: true)
 MCP_ENABLED=$("$PYTHON_BIN" -c "import json, os; d = json.load(open('/data/options.json')) if os.path.exists('/data/options.json') else {}; print('true' if d.get('mcp_enabled', True) else 'false')")
-MCP_MAX_RESULTS=$("$PYTHON_BIN" -c "import json, os; d = json.load(open('/data/options.json')) if os.path.exists('/data/options.json') else {}; print(int(d.get('mcp_max_results', 8)))")
+MCP_MAX_RESULTS=$("$PYTHON_BIN" -c "import json, os; d = json.load(open('/data/options.json')) if os.path.exists('/data/options.json') else {}; print(int(d.get('mcp_max_results', 5)))")
 
 if [ "$MCP_ENABLED" = "true" ]; then
   export MCP_PORT=8889
   export MCP_MAX_RESULTS="$MCP_MAX_RESULTS"
   export SEARXNG_INTERNAL_URL="http://127.0.0.1:8080"
   export SEARXNG_PRESETS_PATH="$PERSISTENT_PRESETS"
+  export SEARXNG_HISTORY_PATH="/config/search_history.jsonl"
   "$PYTHON_BIN" /mcp_server.py &
-  echo "INFO: Started built-in MCP server on port 8889 (endpoints: http://homeassistant.local:8889/mcp and /sse)"
+  echo "INFO: Started built-in MCP server on port 8889 (MCP: /mcp, /sse | Live Search Inspector: http://homeassistant.local:8889/logs)"
 fi
 
 # Run the base image entrypoint

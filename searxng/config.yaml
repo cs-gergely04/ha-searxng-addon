@@ -1,7 +1,7 @@
 name: "SearXNG"
 slug: "searxng"
-description: "Private SearXNG metasearch engine with persistent configuration, built-in MCP server & smart search presets"
-version: "1.3.1"
+description: "Private SearXNG metasearch engine with persistent configuration, built-in MCP server, smart presets & live search inspector"
+version: "1.4.0"
 url: "https://github.com/cs-gergely04/ha-searxng-addon"
 startup: services
 boot: auto
@@ -17,7 +17,7 @@ ports:
 
 ports_description:
   8080/tcp: "SearXNG web interface & JSON API"
-  8889/tcp: "Built-in MCP Server (Streamable HTTP /mcp & SSE /sse)"
+  8889/tcp: "Built-in MCP Server (/mcp, /sse) & Search Inspector (/logs)"
 
 webui: "http://[HOST]:[PORT:8080]"
 
@@ -27,7 +27,7 @@ map:
 options:
   secret_key: ""
   mcp_enabled: true
-  mcp_max_results: 8
+  mcp_max_results: 5
   instance_name: "SearXNG"
   default_lang: "auto"
   default_locale: ""
@@ -44,35 +44,57 @@ options:
     - "wikidata"
   search_presets:
     - alias: "local_news"
-      description: "Search local Vojvodina and Subotica news in Hungarian (Pannon RTV). Automatically extracts the full text of the top 3 news articles."
+      description: "Get a randomized digest of 4 local Vojvodina and Subotica news stories in Hungarian (Pannon RTV) with headlines and short leads. Summarize each in 1 sentence and let the user pick one to read in detail."
       sites: "pannonrtv.com, pannonrtv.rs"
       default_query: "hírek vajdaság szabadka"
       categories: "general,news"
       engines: ""
       language: "hu"
       time_range: "week"
-      max_results: 6
-      fetch_top_n: 3
+      response_mode: "digest"
+      shuffle_results: true
+      max_results: 4
+      digest_words: 25
+      fetch_top_n: 0
     - alias: "it_news"
-      description: "Search latest IT, software engineering, AI, cybersecurity, and technology news. Automatically extracts full article text for top results."
+      description: "Get a randomized digest of 4 latest IT, software engineering, AI, and technology news stories with headlines and short leads. Summarize each in 1 sentence and let the user pick one to explore."
       sites: ""
       default_query: "technology software AI cybersecurity news"
       categories: "it,news"
       engines: ""
       language: "en"
       time_range: "week"
-      max_results: 8
-      fetch_top_n: 2
+      response_mode: "digest"
+      shuffle_results: true
+      max_results: 4
+      digest_words: 25
+      fetch_top_n: 0
+    - alias: "detailed_search"
+      description: "Deep detailed search for a specific topic, news story, or question. Finds the top matching result and extracts its full article text so you can give a comprehensive answer."
+      sites: ""
+      default_query: ""
+      categories: "general,news"
+      engines: ""
+      language: ""
+      time_range: "any"
+      response_mode: "detailed"
+      shuffle_results: false
+      max_results: 3
+      digest_words: 35
+      fetch_top_n: 1
     - alias: "tech_docs"
-      description: "Search technical documentation, GitHub issues, StackOverflow, and developer guides with full-page content extraction."
+      description: "Detailed technical documentation search across GitHub, StackOverflow, and Home Assistant docs with full-page content extraction of the top result."
       sites: "github.com, stackoverflow.com, docs.home-assistant.io, community.home-assistant.io"
       default_query: ""
       categories: "it,general"
       engines: ""
       language: "en"
       time_range: "any"
-      max_results: 6
-      fetch_top_n: 2
+      response_mode: "detailed"
+      shuffle_results: false
+      max_results: 3
+      digest_words: 35
+      fetch_top_n: 1
   reset_settings_yml: false
 
 schema:
@@ -104,6 +126,9 @@ schema:
       engines: "str?"
       language: "str?"
       time_range: "list(any|day|week|month|year)?"
+      response_mode: "list(digest|detailed)?"
+      shuffle_results: "bool?"
       max_results: "int(1,25)?"
+      digest_words: "int(5,100)?"
       fetch_top_n: "int(0,10)?"
   reset_settings_yml: "bool?"

@@ -1,38 +1,19 @@
-# SearXNG Add-on (Persistent Settings, Built-in MCP Server & Smart Presets)
+# SearXNG Add-on (Persistent Settings, Built-in MCP Server, Smart Presets & Search Inspector)
 
-Run SearXNG as a Home Assistant add-on with persistent server-side configuration, a built-in Model Context Protocol (MCP) server, and customizable **Search Presets (Aliases)**.
+Run SearXNG as a Home Assistant add-on with persistent server-side configuration, a built-in Model Context Protocol (MCP) server, customizable **Digest vs. Detailed Search Presets**, and a **Live Search Execution Inspector**.
 
-## Built-in MCP Server & Smart Search Presets
+## Endpoints
 
-The add-on automatically starts a lightweight MCP server on port **8889** alongside SearXNG on port **8888**:
-- **Streamable HTTP endpoint:** `http://homeassistant.local:8889/mcp`
-- **SSE endpoint:** `http://homeassistant.local:8889/sse`
-- **Health & active tools check:** `http://homeassistant.local:8889/health`
+- **SearXNG Web UI:** `http://homeassistant.local:8888`
+- **MCP Server (Streamable HTTP):** `http://homeassistant.local:8889/mcp`
+- **MCP Server (SSE):** `http://homeassistant.local:8889/sse`
+- **Live Search Inspector UI:** `http://homeassistant.local:8889/logs`
+- **Health & Active Tools JSON:** `http://homeassistant.local:8889/health`
 
-### How Search Presets Work
-Every preset defined in the Home Assistant UI (`search_presets`) or in `/addon_configs/<repo>_searxng/presets.yml` is automatically turned into its own **dedicated MCP tool** (`search_<alias>`):
-- **`search_local_news`** (`alias: local_news`): Searches `pannonrtv.com` and `pannonrtv.rs` in Hungarian (`hu`) and automatically fetches the full text of the top 3 articles (`fetch_top_n: 3`) in parallel. If the LLM calls `search_local_news()` with no query, it automatically runs `default_query` (`hírek vajdaság szabadka`).
-- **`search_it_news`** (`alias: it_news`): Searches latest IT, software, AI, and cybersecurity news (`categories: it,news`) and automatically extracts the top 2 full articles.
-- **`search_tech_docs`** (`alias: tech_docs`): Searches `github.com`, `stackoverflow.com`, `docs.home-assistant.io`, and `community.home-assistant.io` and extracts the top 2 pages.
+## Preset Configuration (`digest` vs. `detailed`)
 
-### Customizing Presets
-You can configure presets directly in the Home Assistant **Configuration** tab or edit `/addon_configs/<repo>_searxng/presets.yml` (changes to `presets.yml` are loaded live without restarting):
-
-```yaml
-search_presets:
-  - alias: "local_news"
-    description: "Search local Vojvodina and Subotica news in Hungarian (Pannon RTV)."
-    sites: "pannonrtv.com, pannonrtv.rs"
-    default_query: "hírek vajdaság szabadka"
-    categories: "general,news"
-    language: "hu"
-    time_range: "week"
-    max_results: 6
-    fetch_top_n: 3
-```
-
----
-
-## Server-Wide Configuration (No Cookies Required)
-
-All settings configured in the Home Assistant **Configuration** tab (or in `/addon_configs/<repo>_searxng/settings.yml`) apply globally to both **web browsers** and **MCP LLM tool calls**.
+Each preset in `search_presets` (or `/addon_configs/<repo>_searxng/presets.yml`) supports:
+- `response_mode`:
+  - `"digest"`: Returns **only the headline, the first `digest_words` (e.g. 25) words, and the URL** for 3–5 stories (< 800 chars total, < 1s). Prevents Voice Satellite `1001` errors and instructs the AI to give a 1-sentence summary of each item so you can ask about a specific one.
+  - `"detailed"`: Extracts the full readable article text of the top `fetch_top_n` result(s) (used by `detailed_search` and `tech_docs`).
+- `shuffle_results`: When `true`, randomly selects items from the top 20 candidate pool and rotates away from recently shown URLs so repeated news requests never repeat the same top headline all day.

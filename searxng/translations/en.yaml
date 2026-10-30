@@ -6,11 +6,10 @@ configuration:
       empty, a persistent random key is automatically generated and saved in
       /config/.secret_key.
   mcp_enabled:
-    name: Enable Built-in MCP Server
+    name: Enable Built-in MCP Server & Search Inspector
     description: >-
-      Run the built-in Model Context Protocol (MCP) server on port 8889 (/mcp and
-      /sse) so Home Assistant or any LLM client can use SearXNG as an MCP tool
-      out of the box.
+      Run the built-in Model Context Protocol (MCP) server on port 8889 (/mcp,
+      /sse) and Live Search Inspector UI at http://homeassistant.local:8889/logs.
   mcp_max_results:
     name: MCP Default Max Results
     description: >-
@@ -71,16 +70,15 @@ configuration:
   disabled_engines:
     name: Disabled Engines
     description: >-
-      List of SearXNG engine names (e.g., "bing", "wikidata") to explicitly
+      List of SearXNG engine names (e.g., "wikidata", "bing") to explicitly
       disable globally for all users and MCP searches.
   search_presets:
     name: Preconfigured Search Tasks & Aliases (MCP Presets)
     description: >-
-      Define preconfigured search workflows (aliases like local_news, it_news)
-      with domain filters (sites), default queries, language, time_range, and
-      automatic full-article text extraction (fetch_top_n). Each preset is
-      automatically exposed as its own MCP tool (e.g. search_local_news) and synced
-      with /addon_configs/..._searxng/presets.yml.
+      Define custom search workflows (local_news, it_news, detailed_search, etc.)
+      with response_mode ("digest" for short headlines + first N words, or
+      "detailed" for full article reading), shuffle_results (true/false),
+      digest_words, and fetch_top_n. Synced with /addon_configs/..._searxng/presets.yml.
   reset_settings_yml:
     name: Reset Persistent settings.yml & presets.yml
     description: >-
@@ -89,4 +87,4 @@ configuration:
       off after restarting!
 ports:
   8080/tcp: SearXNG web interface & JSON API
-  8889/tcp: Built-in MCP Server (/mcp & /sse)
+  8889/tcp: Built-in MCP Server (/mcp, /sse) & Search Inspector (/logs)
