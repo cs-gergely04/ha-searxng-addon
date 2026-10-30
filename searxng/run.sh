@@ -307,7 +307,7 @@ if isinstance(ui_presets, list) and len(ui_presets) > 0:
             "categories": str(ui_item.get("categories") if ui_item.get("categories") is not None else merged.get("categories", "general")),
             "engines": str(ui_item.get("engines") if ui_item.get("engines") is not None else merged.get("engines", "")),
             "language": str(ui_item.get("language") if ui_item.get("language") is not None else merged.get("language", "")),
-            "time_range": str(ui_item.get("time_range") if ui_item.get("time_range") is not None else merged.get("time_range", "")),
+            "time_range": "" if str(ui_item.get("time_range") or "").strip().lower() in ("any", "none", "all") else str(ui_item.get("time_range") if ui_item.get("time_range") is not None else merged.get("time_range", "")),
             "max_results": int(ui_item.get("max_results") if ui_item.get("max_results") is not None else merged.get("max_results", 6)),
             "fetch_top_n": int(ui_item.get("fetch_top_n") if ui_item.get("fetch_top_n") is not None else merged.get("fetch_top_n", 2)),
         })

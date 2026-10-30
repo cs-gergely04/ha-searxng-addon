@@ -40,7 +40,7 @@ SSE_LOCK = threading.Lock()
 
 SERVER_INFO = {
     "name": "searxng-ha-mcp",
-    "version": "1.3.0",
+    "version": "1.3.1",
 }
 
 DEFAULT_PRESETS = [
@@ -211,8 +211,8 @@ def build_tools_list() -> list[dict]:
                     },
                     "time_range": {
                         "type": "string",
-                        "description": "Optional time range filter: 'day', 'week', 'month', or 'year'.",
-                        "enum": ["", "day", "week", "month", "year"],
+                        "description": "Optional time range filter: 'day', 'week', 'month', or 'year'. Omit for any time.",
+                        "enum": ["day", "week", "month", "year"],
                     },
                 },
             },
@@ -270,8 +270,8 @@ def build_tools_list() -> list[dict]:
                         },
                         "time_range": {
                             "type": "string",
-                            "description": f"Optional time range override ('day', 'week', 'month', 'year'). Default: '{preset['time_range']}'.",
-                            "enum": ["", "day", "week", "month", "year"],
+                            "description": f"Optional time range override ('day', 'week', 'month', 'year'). Default: '{preset['time_range'] or 'any'}'.",
+                            "enum": ["day", "week", "month", "year"],
                         },
                         "fetch_top_n": {
                             "type": "integer",
@@ -413,6 +413,8 @@ def execute_search_with_preset(args: dict, forced_preset_alias: str | None = Non
     engines = str(args.get("engines") if args.get("engines") is not None else (preset["engines"] if preset else "")).strip()
     language = str(args.get("language") if args.get("language") is not None else (preset["language"] if preset else "")).strip()
     time_range = str(args.get("time_range") if args.get("time_range") is not None else (preset["time_range"] if preset else "")).strip()
+    if time_range.lower() in ("any", "none", "all"):
+        time_range = ""
 
     default_max = preset["max_results"] if preset else MCP_MAX_RESULTS
     max_results = min(max(int(args.get("max_results") if args.get("max_results") is not None else default_max), 1), 25)
