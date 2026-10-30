@@ -1,0 +1,71 @@
+configuration:
+  secret_key:
+    name: Secret Key
+    description: >-
+      Secret key used for SearXNG session validation and encrypted URLs. If left
+      empty, a persistent random key is automatically generated and saved in
+      /config/.secret_key.
+  instance_name:
+    name: Instance Name
+    description: >-
+      Title displayed in the SearXNG web interface.
+  default_lang:
+    name: Default Search Language
+    description: >-
+      Default search result language for all users (e.g., "auto", "all", "en",
+      "en-US", "hu", "hu-HU", "de").
+  default_locale:
+    name: Default UI Language (Locale)
+    description: >-
+      Default web interface language for all users (e.g., "" for browser
+      auto-detect, "en", "hu", "de").
+  autocomplete:
+    name: Default Autocomplete Backend
+    description: >-
+      Search engine used to provide search suggestions for all users ("none" to
+      disable).
+  safe_search:
+    name: Default SafeSearch Level
+    description: >-
+      Filter results globally across browsers (0 = None, 1 = Moderate, 2 = Strict).
+  theme_style:
+    name: Default Theme Style
+    description: >-
+      Color scheme for the Simple theme ("auto", "light", "dark", or "black").
+  infinite_scroll:
+    name: Infinite Scroll
+    description: >-
+      Automatically load the next page of search results when scrolling down.
+  results_on_new_tab:
+    name: Open Results in New Tab
+    description: >-
+      Open clicked search results in a new browser tab by default.
+  search_on_category_select:
+    name: Search on Category Select
+    description: >-
+      Perform search immediately when a category tab is clicked.
+  query_in_title:
+    name: Show Query in Page Title
+    description: >-
+      Include the search query in the browser tab title.
+  image_proxy:
+    name: Image Proxy
+    description: >-
+      Proxy image search results through SearXNG for enhanced privacy.
+  enabled_engines:
+    name: Enabled Engines
+    description: >-
+      List of SearXNG engine names (e.g., "google", "duckduckgo", "brave",
+      "wikipedia") to explicitly enable globally for all users.
+  disabled_engines:
+    name: Disabled Engines
+    description: >-
+      List of SearXNG engine names (e.g., "bing", "wikidata") to explicitly
+      disable globally for all users.
+  reset_settings_yml:
+    name: Reset Persistent settings.yml
+    description: >-
+      If enabled, overwrites /addon_configs/..._searxng/settings.yml with a
+      fresh configuration on next start. Turn this back off after restarting!
+ports:
+  8080/tcp: SearXNG web interface

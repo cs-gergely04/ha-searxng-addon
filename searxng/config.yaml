@@ -1,8 +1,8 @@
 name: "SearXNG"
 slug: "searxng"
-description: "Private SearXNG metasearch engine for OpenClaw"
-version: "1.0.4"
-url: "https://github.com/diegaccio/ha-searxng-addon"
+description: "Private SearXNG metasearch engine with persistent server-side configuration"
+version: "1.1.0"
+url: "https://github.com/cs-gergely04/ha-searxng-addon"
 startup: services
 boot: auto
 init: false
@@ -24,6 +24,36 @@ map:
 
 options:
   secret_key: ""
+  instance_name: "SearXNG"
+  default_lang: "auto"
+  default_locale: ""
+  autocomplete: "duckduckgo"
+  safe_search: 0
+  theme_style: "auto"
+  infinite_scroll: false
+  results_on_new_tab: false
+  search_on_category_select: true
+  query_in_title: false
+  image_proxy: true
+  enabled_engines: []
+  disabled_engines: []
+  reset_settings_yml: false
 
 schema:
   secret_key: "str?"
+  instance_name: "str?"
+  default_lang: "str?"
+  default_locale: "str?"
+  autocomplete: "list(none|duckduckgo|google|bing|brave|startpage|wikipedia|qwant|seznam|mwmbl|360search|baidu|naver|sogou|swisscows|quark|yandex)?"
+  safe_search: "int(0,2)?"
+  theme_style: "list(auto|light|dark|black)?"
+  infinite_scroll: "bool?"
+  results_on_new_tab: "bool?"
+  search_on_category_select: "bool?"
+  query_in_title: "bool?"
+  image_proxy: "bool?"
+  enabled_engines:
+    - "str?"
+  disabled_engines:
+    - "str?"
+  reset_settings_yml: "bool?"

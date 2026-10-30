@@ -1,37 +1,211 @@
 #!/bin/sh
 set -e
 
-# Read secret_key from Supervisor's options.json using Python
-SECRET_KEY=$(python3 -c "import json; print(json.load(open('/data/options.json')).get('secret_key', ''))")
-
-if [ -z "${SECRET_KEY}" ]; then
-  SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-  echo "WARNING: No secret_key configured. Generated a temporary secret key."
-  echo "WARNING: For stable sessions, set secret_key in the add-on configuration."
+# Use SearXNG's virtualenv Python so PyYAML is available
+PYTHON_BIN="/usr/local/searxng/.venv/bin/python"
+if [ ! -x "$PYTHON_BIN" ]; then
+  PYTHON_BIN="python3"
 fi
 
-# Determine the settings path (use SearXNG's env var if available, fallback to default)
 SETTINGS_PATH="${__SEARXNG_SETTINGS_PATH:-/etc/searxng/settings.yml}"
 CONFIG_DIR="$(dirname "$SETTINGS_PATH")"
+PERSISTENT_DIR="/config"
+PERSISTENT_SETTINGS="${PERSISTENT_DIR}/settings.yml"
+SECRET_KEY_FILE="${PERSISTENT_DIR}/.secret_key"
 
-# Create config directory
-mkdir -p "$CONFIG_DIR"
+mkdir -p "$CONFIG_DIR" "$PERSISTENT_DIR"
 
-# Copy default settings and customize
-cp /usr/local/searxng/searx/settings.yml "$SETTINGS_PATH"
+"$PYTHON_BIN" - <<'PYEOF'
+import json
+import os
+import secrets
+import shutil
+import yaml
 
-# Add json to formats using sed
-sed -i 's/    - html/    - html\n    - json/' "$SETTINGS_PATH"
+options_path = "/data/options.json"
+default_settings_path = "/usr/local/searxng/searx/settings.yml"
+persistent_settings_path = "/config/settings.yml"
+secret_key_file = "/config/.secret_key"
 
-# Update server settings using sed
-sed -i 's/bind_address: "127.0.0.1"/bind_address: "0.0.0.0"/' "$SETTINGS_PATH"
-sed -i 's/port: 8888/port: 8080/' "$SETTINGS_PATH"
-sed -i "s/secret_key: \"ultrasecretkey\"/secret_key: \"${SECRET_KEY}\"/" "$SETTINGS_PATH"
-sed -i 's/limiter: true/limiter: false/' "$SETTINGS_PATH"
-sed -i 's/image_proxy: false/image_proxy: true/' "$SETTINGS_PATH"
+options = {}
+if os.path.exists(options_path):
+    with open(options_path, "r", encoding="utf-8") as f:
+        options = json.load(f)
 
-echo "INFO: Created settings.yml with json format enabled at $SETTINGS_PATH"
-grep -A 3 "formats:" "$SETTINGS_PATH"
+# 1. Resolve secret_key (from UI option, or persistent file in /config, or generate new)
+secret_key = (options.get("secret_key") or "").strip()
+if not secret_key:
+    if os.path.exists(secret_key_file):
+        with open(secret_key_file, "r", encoding="utf-8") as f:
+            secret_key = f.read().strip()
+    if not secret_key:
+        secret_key = secrets.token_hex(32)
+        with open(secret_key_file, "w", encoding="utf-8") as f:
+            f.write(secret_key)
+        print("INFO: Generated and saved a persistent secret_key in /config/.secret_key")
+    else:
+        print("INFO: Loaded persistent secret_key from /config/.secret_key")
+else:
+    print("INFO: Using secret_key from Home Assistant add-on configuration")
 
-# Now run the base image entrypoint, which will see our file and skip template creation
+reset_settings = bool(options.get("reset_settings_yml", False))
+
+# 2. Initialize /config/settings.yml if missing or reset requested
+if reset_settings or not os.path.exists(persistent_settings_path):
+    if reset_settings:
+        print("WARNING: reset_settings_yml is enabled! Regenerating /config/settings.yml...")
+    else:
+        print("INFO: Creating initial /config/settings.yml...")
+
+    base_config = {
+        "use_default_settings": True,
+        "general": {
+            "instance_name": "SearXNG",
+        },
+        "search": {
+            "safe_search": 0,
+            "autocomplete": "duckduckgo",
+            "default_lang": "auto",
+            "formats": ["html", "json"],
+        },
+        "server": {
+            "bind_address": "0.0.0.0",
+            "port": 8080,
+            "secret_key": secret_key,
+            "limiter": False,
+            "image_proxy": True,
+        },
+        "ui": {
+            "default_theme": "simple",
+            "default_locale": "",
+            "query_in_title": False,
+            "results_on_new_tab": False,
+            "search_on_category_select": True,
+            "theme_args": {
+                "simple_style": "auto",
+            },
+        },
+        "plugins": {
+            "searx.plugins.infinite_scroll.SXNGPlugin": {
+                "active": False,
+            }
+        },
+    }
+    cfg = base_config
+else:
+    print("INFO: Loading existing persistent /config/settings.yml...")
+    with open(persistent_settings_path, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+
+# Ensure top-level sections exist
+cfg.setdefault("use_default_settings", True)
+general = cfg.setdefault("general", {})
+search = cfg.setdefault("search", {})
+server = cfg.setdefault("server", {})
+ui = cfg.setdefault("ui", {})
+theme_args = ui.setdefault("theme_args", {})
+plugins = cfg.setdefault("plugins", {})
+
+# 3. Apply Home Assistant Add-on UI options onto cfg
+if "instance_name" in options and options["instance_name"]:
+    general["instance_name"] = str(options["instance_name"])
+
+if "safe_search" in options and options["safe_search"] is not None:
+    search["safe_search"] = int(options["safe_search"])
+
+if "autocomplete" in options and options["autocomplete"] is not None:
+    ac = str(options["autocomplete"]).strip()
+    search["autocomplete"] = "" if ac.lower() == "none" else ac
+
+if "default_lang" in options and options["default_lang"] is not None:
+    dl = str(options["default_lang"]).strip()
+    search["default_lang"] = dl if dl else "auto"
+
+formats = search.setdefault("formats", ["html", "json"])
+if "html" not in formats:
+    formats.append("html")
+if "json" not in formats:
+    formats.append("json")
+
+server["bind_address"] = "0.0.0.0"
+server["port"] = 8080
+server["secret_key"] = secret_key
+server["limiter"] = False
+if "image_proxy" in options and options["image_proxy"] is not None:
+    server["image_proxy"] = bool(options["image_proxy"])
+
+if "default_locale" in options and options["default_locale"] is not None:
+    ui["default_locale"] = str(options["default_locale"]).strip()
+
+if "query_in_title" in options and options["query_in_title"] is not None:
+    ui["query_in_title"] = bool(options["query_in_title"])
+
+if "results_on_new_tab" in options and options["results_on_new_tab"] is not None:
+    ui["results_on_new_tab"] = bool(options["results_on_new_tab"])
+
+if "search_on_category_select" in options and options["search_on_category_select"] is not None:
+    ui["search_on_category_select"] = bool(options["search_on_category_select"])
+
+if "theme_style" in options and options["theme_style"]:
+    theme_args["simple_style"] = str(options["theme_style"]).strip()
+
+if "infinite_scroll" in options and options["infinite_scroll"] is not None:
+    inf_plugin = plugins.setdefault("searx.plugins.infinite_scroll.SXNGPlugin", {})
+    inf_plugin["active"] = bool(options["infinite_scroll"])
+
+# Handle enabled_engines and disabled_engines from UI options
+enabled_engines = [str(e).strip() for e in (options.get("enabled_engines") or []) if str(e).strip()]
+disabled_engines = [str(e).strip() for e in (options.get("disabled_engines") or []) if str(e).strip()]
+
+if enabled_engines or disabled_engines:
+    engines_list = cfg.setdefault("engines", [])
+    if not isinstance(engines_list, list):
+        engines_list = []
+        cfg["engines"] = engines_list
+
+    existing_by_name = {
+        item.get("name"): item
+        for item in engines_list
+        if isinstance(item, dict) and "name" in item
+    }
+
+    for eng_name in enabled_engines:
+        if eng_name in existing_by_name:
+            existing_by_name[eng_name]["disabled"] = False
+        else:
+            entry = {"name": eng_name, "disabled": False}
+            engines_list.append(entry)
+            existing_by_name[eng_name] = entry
+
+    for eng_name in disabled_engines:
+        if eng_name in existing_by_name:
+            existing_by_name[eng_name]["disabled"] = True
+        else:
+            entry = {"name": eng_name, "disabled": True}
+            engines_list.append(entry)
+            existing_by_name[eng_name] = entry
+
+header_comment = (
+    "# SearXNG Persistent Configuration for Home Assistant\n"
+    "# Located at /addon_configs/<repo>_searxng/settings.yml (inside container: /config/settings.yml)\n"
+    "# You can edit this file directly to customize engines, plugins, and advanced settings.\n"
+    "# Standard options set in the Home Assistant Add-on Configuration UI are merged on startup.\n\n"
+)
+
+with open(persistent_settings_path, "w", encoding="utf-8") as f:
+    f.write(header_comment)
+    yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+print(f"INFO: Successfully updated persistent configuration at {persistent_settings_path}")
+PYEOF
+
+# Link /config/settings.yml to /etc/searxng/settings.yml so SearXNG uses the persistent file
+rm -f "$SETTINGS_PATH"
+ln -s "$PERSISTENT_SETTINGS" "$SETTINGS_PATH"
+chown -h 977:977 "$SETTINGS_PATH" 2>/dev/null || true
+chown 977:977 "$PERSISTENT_SETTINGS" 2>/dev/null || true
+
+echo "INFO: Linked $SETTINGS_PATH -> $PERSISTENT_SETTINGS"
+
+# Run the base image entrypoint
 exec /usr/local/searxng/entrypoint.sh
