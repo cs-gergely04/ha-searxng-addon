@@ -16,10 +16,10 @@ SECRET_KEY_FILE="${PERSISTENT_DIR}/.secret_key"
 mkdir -p "$CONFIG_DIR" "$PERSISTENT_DIR"
 
 "$PYTHON_BIN" - <<'PYEOF'
+import copy
 import json
 import os
 import secrets
-import shutil
 import yaml
 
 options_path = "/data/options.json"
@@ -31,6 +31,26 @@ options = {}
 if os.path.exists(options_path):
     with open(options_path, "r", encoding="utf-8") as f:
         options = json.load(f)
+
+# Load SearXNG's built-in defaults so we have the full plugins list
+builtin_defaults = {}
+if os.path.exists(default_settings_path):
+    with open(default_settings_path, "r", encoding="utf-8") as f:
+        builtin_defaults = yaml.safe_load(f) or {}
+
+default_plugins = copy.deepcopy(builtin_defaults.get("plugins") or {
+    "searx.plugins.calculator.SXNGPlugin": {"active": True},
+    "searx.plugins.infinite_scroll.SXNGPlugin": {"active": False},
+    "searx.plugins.hash_plugin.SXNGPlugin": {"active": True},
+    "searx.plugins.self_info.SXNGPlugin": {"active": True},
+    "searx.plugins.unit_converter.SXNGPlugin": {"active": True},
+    "searx.plugins.ahmia_filter.SXNGPlugin": {"active": True},
+    "searx.plugins.hostnames.SXNGPlugin": {"active": True},
+    "searx.plugins.time_zone.SXNGPlugin": {"active": True},
+    "searx.plugins.oa_doi_rewrite.SXNGPlugin": {"active": False},
+    "searx.plugins.tor_check.SXNGPlugin": {"active": False},
+    "searx.plugins.tracker_url_remover.SXNGPlugin": {"active": True},
+})
 
 # 1. Resolve secret_key (from UI option, or persistent file in /config, or generate new)
 secret_key = (options.get("secret_key") or "").strip()
@@ -57,7 +77,7 @@ if reset_settings or not os.path.exists(persistent_settings_path):
     else:
         print("INFO: Creating initial /config/settings.yml...")
 
-    base_config = {
+    cfg = {
         "use_default_settings": True,
         "general": {
             "instance_name": "SearXNG",
@@ -85,13 +105,8 @@ if reset_settings or not os.path.exists(persistent_settings_path):
                 "simple_style": "auto",
             },
         },
-        "plugins": {
-            "searx.plugins.infinite_scroll.SXNGPlugin": {
-                "active": False,
-            }
-        },
+        "plugins": copy.deepcopy(default_plugins),
     }
-    cfg = base_config
 else:
     print("INFO: Loading existing persistent /config/settings.yml...")
     with open(persistent_settings_path, "r", encoding="utf-8") as f:
@@ -104,7 +119,16 @@ search = cfg.setdefault("search", {})
 server = cfg.setdefault("server", {})
 ui = cfg.setdefault("ui", {})
 theme_args = ui.setdefault("theme_args", {})
-plugins = cfg.setdefault("plugins", {})
+
+# Ensure all default plugins are present when plugins dict is defined
+# (SearXNG replaces the entire plugins dict when 'plugins' is in settings.yml)
+plugins = cfg.get("plugins")
+if not isinstance(plugins, dict):
+    plugins = copy.deepcopy(default_plugins)
+    cfg["plugins"] = plugins
+else:
+    for k, v in default_plugins.items():
+        plugins.setdefault(k, copy.deepcopy(v))
 
 # 3. Apply Home Assistant Add-on UI options onto cfg
 if "instance_name" in options and options["instance_name"]:
@@ -199,11 +223,17 @@ with open(persistent_settings_path, "w", encoding="utf-8") as f:
 print(f"INFO: Successfully updated persistent configuration at {persistent_settings_path}")
 PYEOF
 
-# Link /config/settings.yml to /etc/searxng/settings.yml so SearXNG uses the persistent file
+# Copy to /etc/searxng/settings.yml AND symlink back?
+# Wait: entrypoint.sh runs:
+#   volume_handler "$__SEARXNG_CONFIG_PATH"
+#   check_file "$__SEARXNG_CONFIG_PATH/settings.yml"
+# Putting a symlink at /etc/searxng/settings.yml -> /config/settings.yml works with `[ -f "$target" ]` and `chown -R searxng:searxng /etc/searxng`
+# Let's also chown /config/settings.yml to searxng:searxng (977:977) so the searxng process can read it.
+chmod 644 "$PERSISTENT_SETTINGS"
+chown 977:977 "$PERSISTENT_SETTINGS" 2>/dev/null || true
 rm -f "$SETTINGS_PATH"
 ln -s "$PERSISTENT_SETTINGS" "$SETTINGS_PATH"
 chown -h 977:977 "$SETTINGS_PATH" 2>/dev/null || true
-chown 977:977 "$PERSISTENT_SETTINGS" 2>/dev/null || true
 
 echo "INFO: Linked $SETTINGS_PATH -> $PERSISTENT_SETTINGS"
 
