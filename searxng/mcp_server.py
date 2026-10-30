@@ -5,14 +5,10 @@ Supports:
   - Streamable HTTP (2025-03-26 / 2024-11-05): POST /mcp, POST /sse, POST /
   - Legacy HTTP + SSE (2024-11-05): GET /sse (or GET /mcp with Accept: text/event-stream) + POST /messages
   - Live Search Inspector Dashboard: GET /logs (and JSON API at GET /logs/json, POST /logs/clear)
-
-Features:
-  - Dynamic Preconfigured Search Tasks & Aliases (Presets) loaded live from /config/presets.yml
-  - Configurable response_mode per preset:
-      * "digest": Voice-safe, ultra-fast randomized digest of 3-5 items with Headline + first N words + URL (<800 chars, <1s)
-      * "detailed": Deep search extracting full article text of the top result(s)
-  - Candidate pool randomization & recently-seen URL rotation so news queries never repeat the same top headline all day
-  - Detailed SearchExecutionObject recorded for every tool call (inspectable at :8889/logs and /config/search_history.jsonl)
+  - Native Voice Satellite Card Image & Media Panel Rendering:
+      * Dedicated `search_images` tool returning top-level `results` ([{image_url, title, thumbnail_url, ...}])
+        and `auto_display` so Voice Satellite Card automatically renders the image grid or fullscreen lightbox!
+      * Automatic `featured_image` extraction on web/news searches so Voice Satellite displays article thumbnails.
 """
 
 from collections import deque
@@ -48,14 +44,14 @@ MAX_HISTORY_ITEMS = 150
 SSE_SESSIONS = {}
 SSE_LOCK = threading.Lock()
 
-# Recently shown URLs per preset/query so repeated calls rotate to unseen stories first
-RECENTLY_SHOWN_URLS = deque(maxlen=40)
+# Recently shown URLs per preset/query so repeated calls rotate to unseen stories/images first
+RECENTLY_SHOWN_URLS = deque(maxlen=50)
 HISTORY_LOCK = threading.Lock()
 SEARCH_HISTORY = deque(maxlen=MAX_HISTORY_ITEMS)
 
 SERVER_INFO = {
     "name": "searxng-ha-mcp",
-    "version": "1.4.0",
+    "version": "1.5.0",
 }
 
 DEFAULT_PRESETS = [
@@ -168,11 +164,10 @@ def record_search_execution(exec_obj: dict):
         except Exception as exc:
             print(f"WARNING: Could not write search history to {HISTORY_PATH}: {exc}", flush=True)
 
-    # Also log a concise, structured debug summary to Home Assistant Add-on container logs
     req_info = exec_obj.get("effective_searxng_request") or {}
     sel_info = exec_obj.get("selection_and_randomization") or {}
     selected_titles = [
-        f"#{r.get('rank')}(orig #{r.get('original_searx_rank')}): {r.get('title', '')[:55]}"
+        f"#{r.get('rank')}(orig #{r.get('original_searx_rank')}): {r.get('title', '')[:45]}"
         for r in (sel_info.get("selected_results") or [])
     ]
     print(
@@ -182,7 +177,7 @@ def record_search_execution(exec_obj: dict):
         f"query={json.dumps(req_info.get('effective_query', ''), ensure_ascii=False)} | "
         f"candidates={exec_obj.get('searxng_raw_stats', {}).get('total_candidates_returned', 0)} -> "
         f"selected={len(selected_titles)} {json.dumps(selected_titles, ensure_ascii=False)} | "
-        f"chars={len(exec_obj.get('final_llm_response_text') or '')} | "
+        f"chars={exec_obj.get('final_llm_response_chars', 0)} | "
         f"duration={exec_obj.get('duration_ms')}ms",
         flush=True,
     )
@@ -278,7 +273,6 @@ def is_generic_landing_url(url: str) -> bool:
         if not path:
             return True
         segments = [s for s in path.split("/") if s]
-        # e.g. /rovat/vajdasag or /category/news with short slug and no article title/id
         if len(segments) == 1 and len(segments[0]) < 16 and "-" not in segments[0]:
             return True
         if segments[0].lower() in ("rovat", "category", "tag", "topic", "rubrika", "author") and len(segments) <= 2:
@@ -288,13 +282,23 @@ def is_generic_landing_url(url: str) -> bool:
     return False
 
 
+def extract_thumbnail_from_item(item: dict) -> str:
+    """Extract a valid HTTP/HTTPS image or thumbnail URL from a SearXNG result item."""
+    for key in ("img_src", "thumbnail", "thumbnail_src"):
+        val = (item.get(key) or "").strip()
+        if val.startswith(("http://", "https://")):
+            return val
+    return ""
+
+
 def select_and_randomize_candidates(
     raw_results: list[dict],
     max_results: int,
     shuffle_enabled: bool,
+    filter_landing_pages: bool = True,
 ) -> tuple[list[dict], dict]:
     """
-    Filter, deduplicate, and optionally randomize results from a larger candidate pool (up to 20 items)
+    Filter, deduplicate, and optionally randomize results from a larger candidate pool (up to 22 items)
     while rotating away from recently shown URLs.
     """
     candidates = []
@@ -302,13 +306,13 @@ def select_and_randomize_candidates(
     seen_urls = set()
     seen_titles = set()
 
-    for idx, item in enumerate(raw_results[:22], start=1):
-        url = (item.get("url") or "").strip()
+    for idx, item in enumerate(raw_results[:24], start=1):
+        url = (item.get("img_src") or item.get("url") or "").strip()
         title = (item.get("title") or "").strip()
-        if not url or not title:
+        if not url:
             continue
-        norm_title = re.sub(r"\W+", "", title.lower())
-        if url in seen_urls or (norm_title and norm_title in seen_titles):
+        norm_title = re.sub(r"\W+", "", title.lower()) if title else ""
+        if url in seen_urls or (norm_title and len(norm_title) > 12 and norm_title in seen_titles):
             continue
         seen_urls.add(url)
         if norm_title:
@@ -316,12 +320,11 @@ def select_and_randomize_candidates(
 
         entry = dict(item)
         entry["_original_rank"] = idx
-        if is_generic_landing_url(url):
+        if filter_landing_pages and is_generic_landing_url(item.get("url") or ""):
             landing_fallbacks.append(entry)
         else:
             candidates.append(entry)
 
-    # If we don't have enough article candidates, top up with landing fallbacks
     if len(candidates) < max_results:
         candidates.extend(landing_fallbacks[: max_results - len(candidates)])
 
@@ -333,10 +336,9 @@ def select_and_randomize_candidates(
             "rotated_away_from_recent": 0,
         }
 
-    # Split into unseen vs recently shown so repeated questions get fresh stories!
     recent_set = set(RECENTLY_SHOWN_URLS)
-    unseen = [c for c in candidates if c.get("url") not in recent_set]
-    seen_recently = [c for c in candidates if c.get("url") in recent_set]
+    unseen = [c for c in candidates if (c.get("img_src") or c.get("url")) not in recent_set]
+    seen_recently = [c for c in candidates if (c.get("img_src") or c.get("url")) in recent_set]
 
     random.shuffle(unseen)
     random.shuffle(seen_recently)
@@ -345,8 +347,9 @@ def select_and_randomize_candidates(
     selected = combined_pool[:max_results]
 
     for s in selected:
-        if s.get("url"):
-            RECENTLY_SHOWN_URLS.append(s["url"])
+        u = s.get("img_src") or s.get("url")
+        if u:
+            RECENTLY_SHOWN_URLS.append(u)
 
     return selected, {
         "pool_size": len(candidates),
@@ -356,7 +359,7 @@ def select_and_randomize_candidates(
 
 
 def build_tools_list() -> list[dict]:
-    """Dynamically build the MCP tools list including web_search, fetch_url, and one tool per preset."""
+    """Dynamically build the MCP tools list including search_images, web_search, fetch_url, and one tool per preset."""
     presets = load_presets()
     preset_aliases = list(presets.keys())
     preset_summary = ", ".join(
@@ -365,6 +368,42 @@ def build_tools_list() -> list[dict]:
     )
 
     tools = [
+        {
+            "name": "search_images",
+            "description": (
+                "Search the internet for images matching a query and display them visually on the user's "
+                "Voice Satellite screen (thumbnail grid or fullscreen). "
+                "ALWAYS call this tool when the user asks to find, search for, show, or see images/pictures/photos."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The image search query (e.g. 'golden retriever', 'Eiffel Tower at night').",
+                    },
+                    "num_results": {
+                        "type": "integer",
+                        "description": "Number of image results to display (1-10, default: 4).",
+                        "default": 4,
+                    },
+                    "auto_display": {
+                        "type": "boolean",
+                        "description": (
+                            "Set to true when the user wants to see a single specific image displayed fullscreen "
+                            "immediately (e.g. 'show me the Mona Lisa'). Set to false when browsing multiple images."
+                        ),
+                        "default": False,
+                    },
+                    "shuffle_results": {
+                        "type": "boolean",
+                        "description": "If true, picks a randomized set of matching images so repeated requests show fresh pictures.",
+                        "default": False,
+                    },
+                },
+                "required": ["query"],
+            },
+        },
         {
             "name": "web_search",
             "description": (
@@ -510,7 +549,7 @@ def fetch_single_url_text(target_url: str, max_length: int = 2000, timeout: int 
     return text or "(No readable text extracted)"
 
 
-def perform_fetch_url(args: dict, tool_name: str = "fetch_url") -> str:
+def perform_fetch_url(args: dict, tool_name: str = "fetch_url") -> dict:
     start_ts = time.time()
     search_id = f"fetch_{datetime.now(timezone.utc).strftime('%H%M%S')}_{uuid.uuid4().hex[:6]}"
     target_url = str(args.get("url") or "").strip()
@@ -533,10 +572,14 @@ def perform_fetch_url(args: dict, tool_name: str = "fetch_url") -> str:
             "selected_results": [{"rank": 1, "original_searx_rank": 1, "title": target_url, "url": target_url}],
         },
         "fetched_articles": [{"url": target_url, "char_length": len(extracted), "extracted_text": extracted}],
+        "final_llm_response_chars": len(extracted),
         "final_llm_response_text": extracted,
     }
     record_search_execution(exec_obj)
-    return extracted
+    return {
+        "content": [{"type": "text", "text": extracted}],
+        "isError": False,
+    }
 
 
 def build_effective_query(user_query: str, default_query: str, query_template: str, sites: list[str]) -> str:
@@ -580,14 +623,151 @@ def query_searxng_json(q: str, categories: str = "", engines: str = "", language
         url,
         headers={
             "Accept": "application/json",
-            "User-Agent": "HomeAssistant-SearXNG-MCP/1.4",
+            "User-Agent": "HomeAssistant-SearXNG-MCP/1.5",
         },
     )
     with urllib.request.urlopen(req, timeout=8) as resp:
         return json.loads(resp.read().decode("utf-8", errors="replace")), url
 
 
-def execute_search_with_preset(args: dict, tool_name: str = "web_search", forced_preset_alias: str | None = None) -> str:
+def execute_image_search(args: dict, tool_name: str = "search_images") -> dict:
+    """
+    Search SearXNG for images (categories=images) and return the exact structure
+    Voice Satellite Card (`src/pipeline/events.js`) expects to render the image grid or lightbox:
+      - Top-level `results`: [{image_url, title, thumbnail_url, source_url, source, width, height}]
+      - Top-level `auto_display`: bool
+    """
+    start_ts = time.time()
+    search_id = f"img_{datetime.now(timezone.utc).strftime('%H%M%S')}_{uuid.uuid4().hex[:6]}"
+
+    query = str(args.get("query") or "").strip()
+    if not query:
+        err_text = "Error: 'query' parameter is required for search_images."
+        return {"content": [{"type": "text", "text": err_text}], "isError": True}
+
+    num_results = min(max(int(args.get("num_results") or 4), 1), 10)
+    auto_display = bool(args.get("auto_display", False))
+    shuffle_enabled = bool(args.get("shuffle_results", False))
+
+    searx_url = ""
+    try:
+        data, searx_url = query_searxng_json(query, categories="images")
+        raw_results = data.get("results") or []
+    except Exception as exc:
+        err_msg = f"Image search failed querying SearXNG: {exc}"
+        record_search_execution({
+            "search_id": search_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "duration_ms": int((time.time() - start_ts) * 1000),
+            "tool_name": tool_name,
+            "preset_used": "images",
+            "raw_llm_arguments": args,
+            "effective_searxng_request": {"url": searx_url, "effective_query": query, "categories": "images"},
+            "error": err_msg,
+            "final_llm_response_chars": len(err_msg),
+            "final_llm_response_text": err_msg,
+        })
+        return {"content": [{"type": "text", "text": err_msg}], "isError": True}
+
+    # Filter only items with a valid http(s) img_src
+    valid_image_items = [
+        item for item in raw_results
+        if (item.get("img_src") or "").strip().startswith(("http://", "https://"))
+    ]
+
+    selected_items, rand_stats = select_and_randomize_candidates(
+        valid_image_items,
+        max_results=num_results,
+        shuffle_enabled=shuffle_enabled,
+        filter_landing_pages=False,
+    )
+
+    vs_results = []
+    debug_selected = []
+    for idx, item in enumerate(selected_items, start=1):
+        img_src = (item.get("img_src") or "").strip()
+        thumb_src = (item.get("thumbnail_src") or item.get("thumbnail") or img_src).strip()
+        title = (item.get("title") or "").strip()
+        source_url = (item.get("url") or "").strip()
+        engine = (item.get("engine") or "").strip()
+
+        vs_results.append({
+            "image_url": img_src,
+            "title": title,
+            "thumbnail_url": thumb_src if thumb_src.startswith(("http://", "https://")) else img_src,
+            "source_url": source_url,
+            "source": engine,
+            "width": None,
+            "height": None,
+        })
+        debug_selected.append({
+            "rank": idx,
+            "original_searx_rank": item.get("_original_rank", idx),
+            "title": title,
+            "url": source_url,
+            "image_url": img_src,
+            "thumbnail_url": thumb_src,
+            "engine": engine,
+            "short_snippet": f"[Image] {img_src}",
+        })
+
+    instruction_text = (
+        f"Found {len(vs_results)} images for '{query}'. "
+        "Do NOT list individual image titles, URLs, sources, or use markdown image syntax. "
+        "The images are displayed visually on the Voice Satellite screen — the user can already see them. "
+        "Respond with a single brief sentence summarizing what you found, e.g. "
+        f"'Here are some pictures of {query}.'"
+    )
+
+    duration_ms = int((time.time() - start_ts) * 1000)
+    exec_obj = {
+        "search_id": search_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "duration_ms": duration_ms,
+        "tool_name": tool_name,
+        "preset_used": "images",
+        "raw_llm_arguments": args,
+        "effective_searxng_request": {
+            "url": searx_url,
+            "effective_query": query,
+            "categories": "images",
+        },
+        "searxng_raw_stats": {
+            "total_candidates_returned": len(valid_image_items),
+            "unresponsive_engines": data.get("unresponsive_engines") or [],
+        },
+        "selection_and_randomization": {
+            "response_mode": "images",
+            "shuffle_enabled": shuffle_enabled,
+            "auto_display": auto_display,
+            "pool_stats": rand_stats,
+            "selected_results": debug_selected,
+        },
+        "voice_satellite_media_payload": {
+            "auto_display": auto_display,
+            "results_count": len(vs_results),
+            "results": vs_results,
+        },
+        "final_llm_response_chars": len(instruction_text),
+        "final_llm_response_text": instruction_text,
+    }
+    record_search_execution(exec_obj)
+
+    # Return BOTH standard MCP `content` AND top-level `results` & `auto_display`
+    # so Home Assistant's MCP client passes `results` directly into `tool_result` for Voice Satellite Card!
+    return {
+        "content": [{"type": "text", "text": instruction_text}],
+        "isError": False,
+        "source": "searxng",
+        "query": query,
+        "num_results": len(vs_results),
+        "auto_display": auto_display,
+        "results": vs_results,
+        "instruction": instruction_text,
+    }
+
+
+def execute_search_with_preset(args: dict, tool_name: str = "web_search", forced_preset_alias: str | None = None) -> dict:
     start_ts = time.time()
     search_id = f"srch_{datetime.now(timezone.utc).strftime('%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
@@ -614,7 +794,8 @@ def execute_search_with_preset(args: dict, tool_name: str = "web_search", forced
 
     effective_query = build_effective_query(user_query, default_query, query_template, sites)
     if not effective_query:
-        return "Error: Please provide a 'query' or use a preset that defines 'default_query' or 'sites'."
+        err_msg = "Error: Please provide a 'query' or use a preset that defines 'default_query' or 'sites'."
+        return {"content": [{"type": "text", "text": err_msg}], "isError": True}
 
     categories = str(args.get("categories") if args.get("categories") is not None else (preset["categories"] if preset else "")).strip()
     engines = str(args.get("engines") if args.get("engines") is not None else (preset["engines"] if preset else "")).strip()
@@ -623,7 +804,12 @@ def execute_search_with_preset(args: dict, tool_name: str = "web_search", forced
     if time_range.lower() in ("any", "none", "all"):
         time_range = ""
 
-    # Resolve response_mode, shuffle_results, digest_words, fetch_top_n
+    # If the user or preset explicitly asked for categories="images", delegate to execute_image_search!
+    if categories.lower() == "images":
+        img_args = dict(args)
+        img_args["query"] = effective_query
+        return execute_image_search(img_args, tool_name=tool_name)
+
     response_mode = str(args.get("response_mode") or (preset["response_mode"] if preset else "digest")).strip().lower()
     if response_mode not in ("digest", "detailed"):
         response_mode = "digest"
@@ -697,9 +883,10 @@ def execute_search_with_preset(args: dict, tool_name: str = "web_search", forced
                 "fallbacks": fallback_steps,
             },
             "error": err_msg,
+            "final_llm_response_chars": len(err_msg),
             "final_llm_response_text": err_msg,
         })
-        return err_msg
+        return {"content": [{"type": "text", "text": err_msg}], "isError": True}
 
     selected_results, rand_stats = select_and_randomize_candidates(
         raw_results,
@@ -710,11 +897,17 @@ def execute_search_with_preset(args: dict, tool_name: str = "web_search", forced
     output_lines = []
     selected_debug_records = []
     fetched_articles_debug = []
+    featured_image = None
+
+    for item in selected_results:
+        thumb = extract_thumbnail_from_item(item)
+        if thumb:
+            featured_image = thumb
+            break
 
     if not selected_results:
         final_text = f"No results found for query: {effective_query}"
     elif response_mode == "digest":
-        # Ultra-compact Voice-Safe Digest Mode: ONLY Headline + First N words + URL
         output_lines.append(
             f"[INSTRUCTION: Below are {len(selected_results)} randomized stories. "
             "Briefly mention a 1-sentence summary for EACH of them (do NOT read only the first one!), "
@@ -726,6 +919,7 @@ def execute_search_with_preset(args: dict, tool_name: str = "web_search", forced
             raw_snippet = (item.get("content") or item.get("snippet") or "").strip()
             short_words = truncate_to_words(raw_snippet, digest_words) if raw_snippet else "(No snippet)"
             orig_rank = item.get("_original_rank", idx)
+            thumb = extract_thumbnail_from_item(item)
 
             output_lines.append(f"{idx}. {title} — {short_words} [URL: {link}]")
             selected_debug_records.append({
@@ -733,27 +927,29 @@ def execute_search_with_preset(args: dict, tool_name: str = "web_search", forced
                 "original_searx_rank": orig_rank,
                 "title": title,
                 "url": link,
+                "thumbnail_url": thumb,
                 "engine": item.get("engine") or "",
                 "short_snippet": short_words,
                 "full_snippet": raw_snippet,
             })
         final_text = "\n".join(output_lines).strip()
     else:
-        # Detailed Mode: Top results + extracted full context of top N
         for idx, item in enumerate(selected_results, start=1):
             title = (item.get("title") or "Untitled").strip()
             link = (item.get("url") or "").strip()
             raw_snippet = (item.get("content") or item.get("snippet") or "").strip()
             orig_rank = item.get("_original_rank", idx)
+            thumb = extract_thumbnail_from_item(item)
 
             output_lines.append(f"{idx}. **{title}** ({link})")
             if raw_snippet:
-                output_lines.append(f"   Snippet: { truncate_to_words(raw_snippet, 45) }")
+                output_lines.append(f"   Snippet: {truncate_to_words(raw_snippet, 45)}")
             selected_debug_records.append({
                 "rank": idx,
                 "original_searx_rank": orig_rank,
                 "title": title,
                 "url": link,
+                "thumbnail_url": thumb,
                 "engine": item.get("engine") or "",
                 "short_snippet": truncate_to_words(raw_snippet, 45),
                 "full_snippet": raw_snippet,
@@ -790,7 +986,6 @@ def execute_search_with_preset(args: dict, tool_name: str = "web_search", forced
 
     duration_ms = int((time.time() - start_ts) * 1000)
 
-    # Record complete SearchExecutionObject for inspection
     exec_obj = {
         "search_id": search_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -825,6 +1020,7 @@ def execute_search_with_preset(args: dict, tool_name: str = "web_search", forced
             "shuffle_enabled": shuffle_enabled,
             "digest_words": digest_words,
             "fetch_top_n": fetch_top_n,
+            "featured_image": featured_image,
             "pool_stats": rand_stats,
             "selected_results": selected_debug_records,
         },
@@ -834,7 +1030,13 @@ def execute_search_with_preset(args: dict, tool_name: str = "web_search", forced
     }
     record_search_execution(exec_obj)
 
-    return final_text
+    mcp_result = {
+        "content": [{"type": "text", "text": final_text}],
+        "isError": False,
+    }
+    if featured_image:
+        mcp_result["featured_image"] = featured_image
+    return mcp_result
 
 
 INSPECTOR_HTML = """<!DOCTYPE html>
@@ -851,8 +1053,6 @@ INSPECTOR_HTML = """<!DOCTYPE html>
       --text: #f8fafc;
       --muted: #94a3b8;
       --accent: #38bdf8;
-      --green: #4ade80;
-      --amber: #fbbf24;
     }
     * { box-sizing: border-box; }
     body {
@@ -864,7 +1064,7 @@ INSPECTOR_HTML = """<!DOCTYPE html>
       padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--border);
     }
     h1 { margin: 0; font-size: 18px; display: flex; align-items: center; gap: 10px; }
-    .controls { display: flex; gap: 8px; align-items: center; }
+    .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     button {
       background: #2563eb; color: #fff; border: none; padding: 7px 12px;
       border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500;
@@ -887,6 +1087,7 @@ INSPECTOR_HTML = """<!DOCTYPE html>
     }
     .badge.digest { background: #0d9488; }
     .badge.detailed { background: #7c3aed; }
+    .badge.images { background: #ec4899; }
     .badge.shuffle { background: #d97706; }
     .meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
     .query-preview { font-size: 13px; margin-top: 6px; word-break: break-word; color: #e2e8f0; }
@@ -905,14 +1106,19 @@ INSPECTOR_HTML = """<!DOCTYPE html>
     th { color: var(--muted); font-weight: 600; }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
+    .img-grid { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+    .img-card { background: #0b1120; border: 1px solid var(--border); border-radius: 6px; padding: 8px; width: 180px; }
+    .img-card img { width: 100%; height: 120px; object-fit: cover; border-radius: 4px; }
+    .img-card div { font-size: 11px; color: var(--muted); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   </style>
 </head>
 <body>
   <header>
-    <h1>SearXNG MCP Search Execution Inspector <span style="font-size:12px;color:var(--muted)">v1.4.0</span></h1>
+    <h1>SearXNG MCP Search Execution Inspector <span style="font-size:12px;color:var(--muted)">v1.5.0</span></h1>
     <div class="controls">
-      <button onclick="runTest('local_news')">Test local_news (Digest)</button>
-      <button onclick="runTest('it_news')">Test it_news (Digest)</button>
+      <button onclick="runTest('local_news')">Test local_news</button>
+      <button onclick="runTest('it_news')">Test it_news</button>
+      <button onclick="runImageTest()">Test search_images</button>
       <button class="secondary" onclick="loadLogs()">Refresh</button>
       <button class="danger" onclick="clearLogs()">Clear History</button>
     </div>
@@ -973,16 +1179,46 @@ INSPECTOR_HTML = """<!DOCTYPE html>
       const req = item.effective_searxng_request || {};
       const sel = item.selection_and_randomization || {};
       const stats = item.searxng_raw_stats || {};
+      const vsMedia = item.voice_satellite_media_payload;
+
+      let mediaPreviewHtml = '';
+      if (vsMedia && Array.isArray(vsMedia.results) && vsMedia.results.length > 0) {
+        const cards = vsMedia.results.map(r => `
+          <div class="img-card">
+            <a href="${escapeHtml(r.image_url)}" target="_blank"><img src="${escapeHtml(r.thumbnail_url || r.image_url)}" alt=""></a>
+            <div title="${escapeHtml(r.title)}">${escapeHtml(r.title || r.source)}</div>
+          </div>
+        `).join('');
+        mediaPreviewHtml = `
+          <div class="card">
+            <h3>Voice Satellite Media Panel Payload (${vsMedia.results.length} images, auto_display=${vsMedia.auto_display})</h3>
+            <div class="img-grid">${cards}</div>
+          </div>
+        `;
+      } else if (sel.featured_image) {
+        mediaPreviewHtml = `
+          <div class="card">
+            <h3>Voice Satellite Featured Image</h3>
+            <div class="img-grid">
+              <div class="img-card">
+                <a href="${escapeHtml(sel.featured_image)}" target="_blank"><img src="${escapeHtml(sel.featured_image)}" alt=""></a>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
       const selectedRows = (sel.selected_results || []).map(r => `
         <tr>
           <td>#${r.rank} <span style="color:var(--muted)">(was #${r.original_searx_rank})</span></td>
-          <td><strong>${escapeHtml(r.title)}</strong><br><a href="${escapeHtml(r.url)}" target="_blank">${escapeHtml(r.url)}</a></td>
+          <td><strong>${escapeHtml(r.title)}</strong><br><a href="${escapeHtml(r.image_url || r.url)}" target="_blank">${escapeHtml(r.image_url || r.url)}</a></td>
           <td>${escapeHtml(r.short_snippet || '')}</td>
           <td>${escapeHtml(r.engine || '')}</td>
         </tr>
       `).join('');
 
       document.getElementById('detail').innerHTML = `
+        ${mediaPreviewHtml}
         <div class="card">
           <h3>1. Final Output Sent to LLM (${item.final_llm_response_chars || 0} chars — Voice Safe)</h3>
           <pre>${escapeHtml(item.final_llm_response_text || '')}</pre>
@@ -1001,7 +1237,7 @@ INSPECTOR_HTML = """<!DOCTYPE html>
         <div class="card">
           <h3>3. Selected & Randomized Results (from ${stats.total_candidates_returned || 0} raw candidates)</h3>
           <table>
-            <thead><tr><th>Rank</th><th>Title & URL</th><th>Snippet Sent</th><th>Engine</th></tr></thead>
+            <thead><tr><th>Rank</th><th>Title & URL</th><th>Snippet / Media</th><th>Engine</th></tr></thead>
             <tbody>${selectedRows || '<tr><td colspan="4">None</td></tr>'}</tbody>
           </table>
         </div>
@@ -1026,6 +1262,19 @@ INSPECTOR_HTML = """<!DOCTYPE html>
         body: JSON.stringify({
           jsonrpc: '2.0', id: Date.now(), method: 'tools/call',
           params: { name: 'search_' + preset, arguments: {} }
+        })
+      });
+      selectedId = null;
+      await loadLogs();
+    }
+
+    async function runImageTest() {
+      await fetch('/mcp', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          jsonrpc: '2.0', id: Date.now(), method: 'tools/call',
+          params: { name: 'search_images', arguments: { query: 'golden retriever puppy', num_results: 4 } }
         })
       });
       selectedId = null;
@@ -1086,26 +1335,28 @@ def handle_jsonrpc_message(msg: dict) -> dict | None:
         tool_args = params.get("arguments") or {}
         presets = load_presets()
 
-        if tool_name in ("web_search", "searxng_web_search", "search"):
-            text_out = execute_search_with_preset(tool_args, tool_name=tool_name, forced_preset_alias=None)
+        if tool_name in ("search_images", "searxng_image_search", "image_search"):
+            res_dict = execute_image_search(tool_args, tool_name=tool_name)
             return {
                 "jsonrpc": "2.0",
                 "id": msg_id,
-                "result": {
-                    "content": [{"type": "text", "text": text_out}],
-                    "isError": False,
-                },
+                "result": res_dict,
+            }
+
+        if tool_name in ("web_search", "searxng_web_search", "search", "search_web"):
+            res_dict = execute_search_with_preset(tool_args, tool_name=tool_name, forced_preset_alias=None)
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "result": res_dict,
             }
 
         if tool_name in ("fetch_url", "web_url_read"):
-            text_out = perform_fetch_url(tool_args, tool_name=tool_name)
+            res_dict = perform_fetch_url(tool_args, tool_name=tool_name)
             return {
                 "jsonrpc": "2.0",
                 "id": msg_id,
-                "result": {
-                    "content": [{"type": "text", "text": text_out}],
-                    "isError": False,
-                },
+                "result": res_dict,
             }
 
         norm_tool = normalize_alias(tool_name)
@@ -1116,14 +1367,11 @@ def handle_jsonrpc_message(msg: dict) -> dict | None:
             matched_alias = norm_tool[len("search_"):]
 
         if matched_alias:
-            text_out = execute_search_with_preset(tool_args, tool_name=tool_name, forced_preset_alias=matched_alias)
+            res_dict = execute_search_with_preset(tool_args, tool_name=tool_name, forced_preset_alias=matched_alias)
             return {
                 "jsonrpc": "2.0",
                 "id": msg_id,
-                "result": {
-                    "content": [{"type": "text", "text": text_out}],
-                    "isError": False,
-                },
+                "result": res_dict,
             }
 
         return {
@@ -1350,8 +1598,8 @@ def main():
     presets = load_presets()
     server = ThreadingHTTPServer(("0.0.0.0", MCP_PORT), MCPHTTPHandler)
     print(
-        f"INFO: SearXNG MCP Server v1.4.0 listening on 0.0.0.0:{MCP_PORT} "
-        f"(MCP: /mcp, /sse | Live Inspector: /logs) with {len(presets)} presets ({', '.join(presets.keys())})",
+        f"INFO: SearXNG MCP Server v1.5.0 listening on 0.0.0.0:{MCP_PORT} "
+        f"(MCP: /mcp, /sse | Live Inspector: /logs) with search_images & {len(presets)} presets ({', '.join(presets.keys())})",
         flush=True,
     )
     server.serve_forever()

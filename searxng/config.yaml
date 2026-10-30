@@ -1,7 +1,7 @@
 name: "SearXNG"
 slug: "searxng"
 description: "Private SearXNG metasearch engine with persistent configuration, built-in MCP server, smart presets & live search inspector"
-version: "1.4.0"
+version: "1.5.0"
 url: "https://github.com/cs-gergely04/ha-searxng-addon"
 startup: services
 boot: auto

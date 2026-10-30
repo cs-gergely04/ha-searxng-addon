@@ -23,7 +23,8 @@ Run a **free, privacy-friendly search engine** on your Home Assistant OS device 
 
 | MCP Tool Name | Alias | Mode | Shuffle | What It Does Out of the Box |
 | :--- | :--- | :--- | :--- | :--- |
-| `search_local_news` | `local_news` | `digest` | `true` | Picks **4 randomized** local Vojvodina/Subotica news stories from `pannonrtv.com` & `pannonrtv.rs` (`lang: hu`) with headline + first 25 words so your AI can summarize each in 1 sentence. |
+| `search_images` | *(images)* | `images` | configurable | Searches SearXNG Images (`categories=images`) and returns the exact `results` (`image_url`, `thumbnail_url`, `title`) & `auto_display` payload that **Voice Satellite Card** needs to pop up the thumbnail grid or fullscreen lightbox on screen! |
+| `search_local_news` | `local_news` | `digest` | `true` | Picks **4 randomized** local Vojvodina/Subotica news stories from `pannonrtv.com` & `pannonrtv.rs` (`lang: hu`) with headline + first 25 words so your AI can summarize each in 1 sentence (plus `featured_image` thumbnail). |
 | `search_it_news` | `it_news` | `digest` | `true` | Picks **4 randomized** IT, software, AI & cybersecurity news stories (`categories: it,news`) with headline + first 25 words. |
 | `search_detailed_search` | `detailed_search` | `detailed` | `false` | Deep search for a specific story or question — extracts the full readable text of the top result (`fetch_top_n: 1`). |
 | `search_tech_docs` | `tech_docs` | `detailed` | `false` | Searches `github.com`, `stackoverflow.com`, and `home-assistant.io` docs and extracts the full text of the top result. |
