@@ -5,6 +5,16 @@ configuration:
       Secret key used for SearXNG session validation and encrypted URLs. If left
       empty, a persistent random key is automatically generated and saved in
       /config/.secret_key.
+  mcp_enabled:
+    name: Enable Built-in MCP Server
+    description: >-
+      Run the built-in Model Context Protocol (MCP) server on port 8889 (/mcp and
+      /sse) so Home Assistant or any LLM client can use SearXNG as an MCP tool
+      out of the box.
+  mcp_max_results:
+    name: MCP Default Max Results
+    description: >-
+      Default number of search results returned by the MCP web_search tool (1-25).
   instance_name:
     name: Instance Name
     description: >-
@@ -12,8 +22,8 @@ configuration:
   default_lang:
     name: Default Search Language
     description: >-
-      Default search result language for all users (e.g., "auto", "all", "en",
-      "en-US", "hu", "hu-HU", "de").
+      Default search result language for all users and MCP queries (e.g., "auto",
+      "all", "en", "en-US", "hu", "hu-HU", "de").
   default_locale:
     name: Default UI Language (Locale)
     description: >-
@@ -27,7 +37,8 @@ configuration:
   safe_search:
     name: Default SafeSearch Level
     description: >-
-      Filter results globally across browsers (0 = None, 1 = Moderate, 2 = Strict).
+      Filter results globally across browsers and MCP queries (0 = None,
+      1 = Moderate, 2 = Strict).
   theme_style:
     name: Default Theme Style
     description: >-
@@ -56,16 +67,17 @@ configuration:
     name: Enabled Engines
     description: >-
       List of SearXNG engine names (e.g., "google", "duckduckgo", "brave",
-      "wikipedia") to explicitly enable globally for all users.
+      "wikipedia") to explicitly enable globally for all users and MCP searches.
   disabled_engines:
     name: Disabled Engines
     description: >-
       List of SearXNG engine names (e.g., "bing", "wikidata") to explicitly
-      disable globally for all users.
+      disable globally for all users and MCP searches.
   reset_settings_yml:
     name: Reset Persistent settings.yml
     description: >-
       If enabled, overwrites /addon_configs/..._searxng/settings.yml with a
       fresh configuration on next start. Turn this back off after restarting!
 ports:
-  8080/tcp: SearXNG web interface
+  8080/tcp: SearXNG web interface & JSON API
+  8889/tcp: Built-in MCP Server (/mcp & /sse)

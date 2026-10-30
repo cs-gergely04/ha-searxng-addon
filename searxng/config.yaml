@@ -1,7 +1,7 @@
 name: "SearXNG"
 slug: "searxng"
-description: "Private SearXNG metasearch engine with persistent server-side configuration"
-version: "1.1.0"
+description: "Private SearXNG metasearch engine with persistent configuration & built-in MCP server"
+version: "1.2.0"
 url: "https://github.com/cs-gergely04/ha-searxng-addon"
 startup: services
 boot: auto
@@ -13,9 +13,11 @@ arch:
 
 ports:
   8080/tcp: 8888
+  8889/tcp: 8889
 
 ports_description:
-  8080/tcp: "SearXNG web interface"
+  8080/tcp: "SearXNG web interface & JSON API"
+  8889/tcp: "Built-in MCP Server (Streamable HTTP /mcp & SSE /sse)"
 
 webui: "http://[HOST]:[PORT:8080]"
 
@@ -24,6 +26,8 @@ map:
 
 options:
   secret_key: ""
+  mcp_enabled: true
+  mcp_max_results: 8
   instance_name: "SearXNG"
   default_lang: "auto"
   default_locale: ""
@@ -41,6 +45,8 @@ options:
 
 schema:
   secret_key: "str?"
+  mcp_enabled: "bool?"
+  mcp_max_results: "int(1,25)?"
   instance_name: "str?"
   default_lang: "str?"
   default_locale: "str?"

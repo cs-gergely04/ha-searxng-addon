@@ -121,7 +121,6 @@ ui = cfg.setdefault("ui", {})
 theme_args = ui.setdefault("theme_args", {})
 
 # Ensure all default plugins are present when plugins dict is defined
-# (SearXNG replaces the entire plugins dict when 'plugins' is in settings.yml)
 plugins = cfg.get("plugins")
 if not isinstance(plugins, dict):
     plugins = copy.deepcopy(default_plugins)
@@ -223,12 +222,6 @@ with open(persistent_settings_path, "w", encoding="utf-8") as f:
 print(f"INFO: Successfully updated persistent configuration at {persistent_settings_path}")
 PYEOF
 
-# Copy to /etc/searxng/settings.yml AND symlink back?
-# Wait: entrypoint.sh runs:
-#   volume_handler "$__SEARXNG_CONFIG_PATH"
-#   check_file "$__SEARXNG_CONFIG_PATH/settings.yml"
-# Putting a symlink at /etc/searxng/settings.yml -> /config/settings.yml works with `[ -f "$target" ]` and `chown -R searxng:searxng /etc/searxng`
-# Let's also chown /config/settings.yml to searxng:searxng (977:977) so the searxng process can read it.
 chmod 644 "$PERSISTENT_SETTINGS"
 chown 977:977 "$PERSISTENT_SETTINGS" 2>/dev/null || true
 rm -f "$SETTINGS_PATH"
@@ -236,6 +229,18 @@ ln -s "$PERSISTENT_SETTINGS" "$SETTINGS_PATH"
 chown -h 977:977 "$SETTINGS_PATH" 2>/dev/null || true
 
 echo "INFO: Linked $SETTINGS_PATH -> $PERSISTENT_SETTINGS"
+
+# Check if built-in MCP server is enabled (default: true)
+MCP_ENABLED=$("$PYTHON_BIN" -c "import json, os; d = json.load(open('/data/options.json')) if os.path.exists('/data/options.json') else {}; print('true' if d.get('mcp_enabled', True) else 'false')")
+MCP_MAX_RESULTS=$("$PYTHON_BIN" -c "import json, os; d = json.load(open('/data/options.json')) if os.path.exists('/data/options.json') else {}; print(int(d.get('mcp_max_results', 8)))")
+
+if [ "$MCP_ENABLED" = "true" ]; then
+  export MCP_PORT=8889
+  export MCP_MAX_RESULTS="$MCP_MAX_RESULTS"
+  export SEARXNG_INTERNAL_URL="http://127.0.0.1:8080"
+  "$PYTHON_BIN" /mcp_server.py &
+  echo "INFO: Started built-in MCP server on port 8889 (endpoints: http://homeassistant.local:8889/mcp and /sse)"
+fi
 
 # Run the base image entrypoint
 exec /usr/local/searxng/entrypoint.sh
