@@ -1,48 +1,38 @@
-# SearXNG Add-on (with Persistent Settings & Built-in MCP Server)
+# SearXNG Add-on (Persistent Settings, Built-in MCP Server & Smart Presets)
 
-Run SearXNG as a Home Assistant add-on with persistent server-side configuration and a built-in Model Context Protocol (MCP) server for LLMs.
+Run SearXNG as a Home Assistant add-on with persistent server-side configuration, a built-in Model Context Protocol (MCP) server, and customizable **Search Presets (Aliases)**.
 
-## Built-in MCP Server (Works Out of the Box)
+## Built-in MCP Server & Smart Search Presets
 
-The add-on automatically starts a lightweight MCP server on port **8889** alongside SearXNG on port **8888**.
-
+The add-on automatically starts a lightweight MCP server on port **8889** alongside SearXNG on port **8888**:
 - **Streamable HTTP endpoint:** `http://homeassistant.local:8889/mcp`
 - **SSE endpoint:** `http://homeassistant.local:8889/sse`
-- **Health check:** `http://homeassistant.local:8889/health`
+- **Health & active tools check:** `http://homeassistant.local:8889/health`
 
-### Provided MCP Tools
-1. **`web_search`**: Queries your local SearXNG instance (`query`, optional `max_results`, `categories`, `language`, `time_range`) and returns clean, LLM-friendly formatted results (titles, URLs, snippets, direct answers).
-2. **`fetch_url`**: Fetches and extracts readable plain text from any webpage URL (`url`, optional `max_length`) so your LLM can read full pages found in search results.
+### How Search Presets Work
+Every preset defined in the Home Assistant UI (`search_presets`) or in `/addon_configs/<repo>_searxng/presets.yml` is automatically turned into its own **dedicated MCP tool** (`search_<alias>`):
+- **`search_local_news`** (`alias: local_news`): Searches `pannonrtv.com` and `pannonrtv.rs` in Hungarian (`hu`) and automatically fetches the full text of the top 3 articles (`fetch_top_n: 3`) in parallel. If the LLM calls `search_local_news()` with no query, it automatically runs `default_query` (`hírek vajdaság szabadka`).
+- **`search_it_news`** (`alias: it_news`): Searches latest IT, software, AI, and cybersecurity news (`categories: it,news`) and automatically extracts the top 2 full articles.
+- **`search_tech_docs`** (`alias: tech_docs`): Searches `github.com`, `stackoverflow.com`, `docs.home-assistant.io`, and `community.home-assistant.io` and extracts the top 2 pages.
 
-### Connecting to Home Assistant LLM / Assist
-1. Go to **Settings -> Devices & Services -> Add Integration -> Model Context Protocol**.
-2. Enter `http://homeassistant.local:8889/mcp` (or `http://homeassistant.local:8889/sse`).
-3. Your LLM agent now has live web search and page reading capabilities!
+### Customizing Presets
+You can configure presets directly in the Home Assistant **Configuration** tab or edit `/addon_configs/<repo>_searxng/presets.yml` (changes to `presets.yml` are loaded live without restarting):
+
+```yaml
+search_presets:
+  - alias: "local_news"
+    description: "Search local Vojvodina and Subotica news in Hungarian (Pannon RTV)."
+    sites: "pannonrtv.com, pannonrtv.rs"
+    default_query: "hírek vajdaság szabadka"
+    categories: "general,news"
+    language: "hu"
+    time_range: "week"
+    max_results: 6
+    fetch_top_n: 3
+```
 
 ---
 
 ## Server-Wide Configuration (No Cookies Required)
 
-Configure options directly in the add-on's **Configuration** tab:
-
-```yaml
-secret_key: ""
-mcp_enabled: true
-mcp_max_results: 8
-instance_name: "SearXNG"
-default_lang: "auto"
-default_locale: ""
-autocomplete: "duckduckgo"
-safe_search: 0
-theme_style: "auto"
-infinite_scroll: false
-results_on_new_tab: false
-search_on_category_select: true
-query_in_title: false
-image_proxy: true
-enabled_engines: []
-disabled_engines: []
-reset_settings_yml: false
-```
-
-All settings configured here (or manually in `/addon_configs/<repo>_searxng/settings.yml`) apply globally to both **web browsers** and **MCP LLM tool calls**.
+All settings configured in the Home Assistant **Configuration** tab (or in `/addon_configs/<repo>_searxng/settings.yml`) apply globally to both **web browsers** and **MCP LLM tool calls**.

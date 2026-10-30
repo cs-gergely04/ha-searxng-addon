@@ -73,11 +73,20 @@ configuration:
     description: >-
       List of SearXNG engine names (e.g., "bing", "wikidata") to explicitly
       disable globally for all users and MCP searches.
-  reset_settings_yml:
-    name: Reset Persistent settings.yml
+  search_presets:
+    name: Preconfigured Search Tasks & Aliases (MCP Presets)
     description: >-
-      If enabled, overwrites /addon_configs/..._searxng/settings.yml with a
-      fresh configuration on next start. Turn this back off after restarting!
+      Define preconfigured search workflows (aliases like local_news, it_news)
+      with domain filters (sites), default queries, language, time_range, and
+      automatic full-article text extraction (fetch_top_n). Each preset is
+      automatically exposed as its own MCP tool (e.g. search_local_news) and synced
+      with /addon_configs/..._searxng/presets.yml.
+  reset_settings_yml:
+    name: Reset Persistent settings.yml & presets.yml
+    description: >-
+      If enabled, overwrites /addon_configs/..._searxng/settings.yml and
+      presets.yml with fresh default configurations on next start. Turn this back
+      off after restarting!
 ports:
   8080/tcp: SearXNG web interface & JSON API
   8889/tcp: Built-in MCP Server (/mcp & /sse)

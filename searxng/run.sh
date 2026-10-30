@@ -11,6 +11,7 @@ SETTINGS_PATH="${__SEARXNG_SETTINGS_PATH:-/etc/searxng/settings.yml}"
 CONFIG_DIR="$(dirname "$SETTINGS_PATH")"
 PERSISTENT_DIR="/config"
 PERSISTENT_SETTINGS="${PERSISTENT_DIR}/settings.yml"
+PERSISTENT_PRESETS="${PERSISTENT_DIR}/presets.yml"
 SECRET_KEY_FILE="${PERSISTENT_DIR}/.secret_key"
 
 mkdir -p "$CONFIG_DIR" "$PERSISTENT_DIR"
@@ -25,6 +26,7 @@ import yaml
 options_path = "/data/options.json"
 default_settings_path = "/usr/local/searxng/searx/settings.yml"
 persistent_settings_path = "/config/settings.yml"
+persistent_presets_path = "/config/presets.yml"
 secret_key_file = "/config/.secret_key"
 
 options = {}
@@ -220,10 +222,117 @@ with open(persistent_settings_path, "w", encoding="utf-8") as f:
     yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 print(f"INFO: Successfully updated persistent configuration at {persistent_settings_path}")
+
+# 4. Initialize & Sync /config/presets.yml (Preconfigured Search Tasks & Aliases)
+default_presets = [
+    {
+        "alias": "local_news",
+        "description": "Search local Vojvodina and Subotica news in Hungarian (Pannon RTV). Automatically extracts the full text of the top 3 news articles.",
+        "sites": ["pannonrtv.com", "pannonrtv.rs"],
+        "default_query": "hírek vajdaság szabadka",
+        "query_template": "",
+        "categories": "general,news",
+        "engines": "",
+        "language": "hu",
+        "time_range": "week",
+        "max_results": 6,
+        "fetch_top_n": 3,
+    },
+    {
+        "alias": "it_news",
+        "description": "Search latest IT, software engineering, AI, cybersecurity, and technology news. Automatically extracts full article text for top results.",
+        "sites": [],
+        "default_query": "technology software AI cybersecurity news",
+        "query_template": "",
+        "categories": "it,news",
+        "engines": "",
+        "language": "en",
+        "time_range": "week",
+        "max_results": 8,
+        "fetch_top_n": 2,
+    },
+    {
+        "alias": "tech_docs",
+        "description": "Search technical documentation, GitHub issues, StackOverflow, and Home Assistant guides with full-page content extraction.",
+        "sites": ["github.com", "stackoverflow.com", "docs.home-assistant.io", "community.home-assistant.io"],
+        "default_query": "",
+        "query_template": "",
+        "categories": "it,general",
+        "engines": "",
+        "language": "en",
+        "time_range": "",
+        "max_results": 6,
+        "fetch_top_n": 2,
+    },
+]
+
+existing_presets = []
+if not reset_settings and os.path.exists(persistent_presets_path):
+    try:
+        with open(persistent_presets_path, "r", encoding="utf-8") as f:
+            loaded_presets_doc = yaml.safe_load(f) or {}
+            if isinstance(loaded_presets_doc, dict):
+                existing_presets = loaded_presets_doc.get("presets") or []
+            elif isinstance(loaded_presets_doc, list):
+                existing_presets = loaded_presets_doc
+    except Exception as exc:
+        print(f"WARNING: Could not parse existing {persistent_presets_path}: {exc}")
+
+presets_by_alias = {}
+for item in (existing_presets or default_presets):
+    if isinstance(item, dict) and item.get("alias"):
+        alias_key = str(item["alias"]).strip()
+        presets_by_alias[alias_key] = copy.deepcopy(item)
+
+# Merge presets from Home Assistant UI (options["search_presets"])
+ui_presets = options.get("search_presets")
+if isinstance(ui_presets, list) and len(ui_presets) > 0:
+    for ui_item in ui_presets:
+        if not isinstance(ui_item, dict) or not ui_item.get("alias"):
+            continue
+        alias_key = str(ui_item["alias"]).strip()
+        raw_sites = ui_item.get("sites", "")
+        if isinstance(raw_sites, list):
+            sites_list = [str(s).strip() for s in raw_sites if str(s).strip()]
+        else:
+            sites_list = [s.strip() for s in str(raw_sites or "").split(",") if s.strip()]
+
+        merged = presets_by_alias.get(alias_key, {})
+        merged.update({
+            "alias": alias_key,
+            "description": str(ui_item.get("description") or merged.get("description") or f"Preconfigured search preset '{alias_key}'"),
+            "sites": sites_list,
+            "default_query": str(ui_item.get("default_query") if ui_item.get("default_query") is not None else merged.get("default_query", "")),
+            "query_template": str(ui_item.get("query_template") if ui_item.get("query_template") is not None else merged.get("query_template", "")),
+            "categories": str(ui_item.get("categories") if ui_item.get("categories") is not None else merged.get("categories", "general")),
+            "engines": str(ui_item.get("engines") if ui_item.get("engines") is not None else merged.get("engines", "")),
+            "language": str(ui_item.get("language") if ui_item.get("language") is not None else merged.get("language", "")),
+            "time_range": str(ui_item.get("time_range") if ui_item.get("time_range") is not None else merged.get("time_range", "")),
+            "max_results": int(ui_item.get("max_results") if ui_item.get("max_results") is not None else merged.get("max_results", 6)),
+            "fetch_top_n": int(ui_item.get("fetch_top_n") if ui_item.get("fetch_top_n") is not None else merged.get("fetch_top_n", 2)),
+        })
+        presets_by_alias[alias_key] = merged
+
+if not presets_by_alias:
+    for item in default_presets:
+        presets_by_alias[item["alias"]] = item
+
+presets_header = (
+    "# SearXNG MCP Preconfigured Search Tasks & Aliases (Presets)\n"
+    "# Located at /addon_configs/<repo>_searxng/presets.yml (inside container: /config/presets.yml)\n"
+    "# Each preset here is automatically exposed as a dedicated MCP tool (e.g. search_local_news, search_it_news)\n"
+    "# AND can be edited live without restarting the add-on!\n\n"
+)
+
+with open(persistent_presets_path, "w", encoding="utf-8") as f:
+    f.write(presets_header)
+    yaml.safe_dump({"presets": list(presets_by_alias.values())}, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+print(f"INFO: Successfully synced {len(presets_by_alias)} search presets to {persistent_presets_path}")
 PYEOF
 
-chmod 644 "$PERSISTENT_SETTINGS"
-chown 977:977 "$PERSISTENT_SETTINGS" 2>/dev/null || true
+chmod 644 "$PERSISTENT_SETTINGS" "$PERSISTENT_PRESETS" 2>/dev/null || true
+chown 977:977 "$PERSISTENT_SETTINGS" "$PERSISTENT_PRESETS" 2>/dev/null || true
 rm -f "$SETTINGS_PATH"
 ln -s "$PERSISTENT_SETTINGS" "$SETTINGS_PATH"
 chown -h 977:977 "$SETTINGS_PATH" 2>/dev/null || true
@@ -238,6 +347,7 @@ if [ "$MCP_ENABLED" = "true" ]; then
   export MCP_PORT=8889
   export MCP_MAX_RESULTS="$MCP_MAX_RESULTS"
   export SEARXNG_INTERNAL_URL="http://127.0.0.1:8080"
+  export SEARXNG_PRESETS_PATH="$PERSISTENT_PRESETS"
   "$PYTHON_BIN" /mcp_server.py &
   echo "INFO: Started built-in MCP server on port 8889 (endpoints: http://homeassistant.local:8889/mcp and /sse)"
 fi

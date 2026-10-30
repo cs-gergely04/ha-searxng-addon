@@ -1,7 +1,7 @@
 name: "SearXNG"
 slug: "searxng"
-description: "Private SearXNG metasearch engine with persistent configuration & built-in MCP server"
-version: "1.2.0"
+description: "Private SearXNG metasearch engine with persistent configuration, built-in MCP server & smart search presets"
+version: "1.3.0"
 url: "https://github.com/cs-gergely04/ha-searxng-addon"
 startup: services
 boot: auto
@@ -41,6 +41,37 @@ options:
   image_proxy: true
   enabled_engines: []
   disabled_engines: []
+  search_presets:
+    - alias: "local_news"
+      description: "Search local Vojvodina and Subotica news in Hungarian (Pannon RTV). Automatically extracts the full text of the top 3 news articles."
+      sites: "pannonrtv.com, pannonrtv.rs"
+      default_query: "hírek vajdaság szabadka"
+      categories: "general,news"
+      engines: ""
+      language: "hu"
+      time_range: "week"
+      max_results: 6
+      fetch_top_n: 3
+    - alias: "it_news"
+      description: "Search latest IT, software engineering, AI, cybersecurity, and technology news. Automatically extracts full article text for top results."
+      sites: ""
+      default_query: "technology software AI cybersecurity news"
+      categories: "it,news"
+      engines: ""
+      language: "en"
+      time_range: "week"
+      max_results: 8
+      fetch_top_n: 2
+    - alias: "tech_docs"
+      description: "Search technical documentation, GitHub issues, StackOverflow, and developer guides with full-page content extraction."
+      sites: "github.com, stackoverflow.com, docs.home-assistant.io, community.home-assistant.io"
+      default_query: ""
+      categories: "it,general"
+      engines: ""
+      language: "en"
+      time_range: ""
+      max_results: 6
+      fetch_top_n: 2
   reset_settings_yml: false
 
 schema:
@@ -62,4 +93,16 @@ schema:
     - "str?"
   disabled_engines:
     - "str?"
+  search_presets:
+    - alias: "str"
+      description: "str?"
+      sites: "str?"
+      default_query: "str?"
+      query_template: "str?"
+      categories: "str?"
+      engines: "str?"
+      language: "str?"
+      time_range: "list(|day|week|month|year)?"
+      max_results: "int(1,25)?"
+      fetch_top_n: "int(0,10)?"
   reset_settings_yml: "bool?"

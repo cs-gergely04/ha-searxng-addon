@@ -1,18 +1,20 @@
-# SearXNG Home Assistant Add-on (with Persistent Settings & Built-in MCP Server)
+# SearXNG Home Assistant Add-on (Persistent Settings, Built-in MCP Server & Smart Presets)
 
-Run a **free, privacy-friendly search engine** on your Home Assistant OS device with **persistent server-side configuration** and a **built-in Model Context Protocol (MCP) server** that works out of the box with your LLM.
+Run a **free, privacy-friendly search engine** on your Home Assistant OS device with **persistent server-side configuration**, a **built-in Model Context Protocol (MCP) server**, and **Preconfigured Search Tasks / Aliases (Presets)** that give your LLM one-shot deep search workflows.
 
 ## Key Features
 
 1. **Built-in MCP Server (`:8889/mcp` and `:8889/sse`) — Works Out of the Box!**
-   - Starts automatically on port `8889` alongside SearXNG.
+   - Starts automatically on port `8889` alongside SearXNG (`:8888`).
    - Supports both **Streamable HTTP** (`http://homeassistant.local:8889/mcp`) and **SSE** (`http://homeassistant.local:8889/sse`).
-   - Exposes two tools to your LLM:
-     - `web_search`: Search the web via your local SearXNG instance (automatically using your server-side language, SafeSearch, and engine settings).
-     - `fetch_url`: Read and extract clean plain text from any web page URL found in search results.
-2. **Global Server-Side Configuration (No Cookies Needed)**
-   - Configure default language, SafeSearch, autocomplete, theme style, and enabled/disabled search engines directly in the **Home Assistant Add-on Configuration UI**.
-   - Persists `/addon_configs/<repo>_searxng/settings.yml` (`/config/settings.yml`) across restarts so manual edits are never wiped out.
+2. **Preconfigured Search Tasks & Aliases (Presets)**
+   - Define custom search aliases (like `local_news`, `it_news`, `tech_docs`) in the **Home Assistant Add-on UI** or in `/addon_configs/<repo>_searxng/presets.yml`.
+   - **Dedicated MCP Tool per Alias:** Every preset is automatically exposed to your LLM as its own MCP tool (`search_local_news`, `search_it_news`, `search_tech_docs`, etc.) **and** as a `preset` option on `web_search`.
+   - **Domain Restriction (`sites`):** Automatically restricts searches to specific domains (e.g. `pannonrtv.com, pannonrtv.rs`).
+   - **Auto-Read Full Articles (`fetch_top_n`):** Automatically fetches and extracts the full readable article text of the top `N` results in parallel so your LLM gets the complete story in **a single tool call**.
+   - **Live Reloading:** Editing `/addon_configs/<repo>_searxng/presets.yml` takes effect immediately on the next MCP tool call without restarting the container!
+3. **Global Server-Side Configuration (No Cookies Needed)**
+   - Configure default language, SafeSearch, autocomplete, theme style, and enabled/disabled search engines directly in the **Home Assistant Add-on Configuration UI** or `/addon_configs/<repo>_searxng/settings.yml`.
 
 ---
 
@@ -28,42 +30,36 @@ Run a **free, privacy-friendly search engine** on your Home Assistant OS device 
 
 ---
 
-## Connect Your LLM via MCP (Zero Extra Containers Needed)
+## Connect Your LLM via MCP
 
 As soon as the add-on starts, the built-in MCP server is live on port `8889`:
 
 - **Streamable HTTP URL:** `http://homeassistant.local:8889/mcp` (or `http://HOME_ASSISTANT_IP:8889/mcp`)
 - **SSE URL:** `http://homeassistant.local:8889/sse` (or `http://HOME_ASSISTANT_IP:8889/sse`)
 
-### Home Assistant Native MCP Client Integration
-1. Go to **Settings -> Devices & Services -> Add Integration**.
-2. Select **Model Context Protocol**.
-3. Enter `http://homeassistant.local:8889/mcp` (or `http://127.0.0.1:8889/mcp` / `http://homeassistant.local:8889/sse`).
-4. Enable tool access in your Home Assistant Conversation Agent (Assist / OpenAI / Ollama / Google Generative AI / Local LLM).
+### Built-in Default Presets (Exposed Automatically as MCP Tools)
+| MCP Tool Name | Alias | What It Does Out of the Box |
+| :--- | :--- | :--- |
+| `search_local_news` | `local_news` | Searches local Vojvodina/Subotica news on `pannonrtv.com` & `pannonrtv.rs` (`lang: hu`, `time_range: week`) and **automatically extracts the full text of the top 3 articles**. Works even with an empty query! |
+| `search_it_news` | `it_news` | Searches latest IT, software, AI & cybersecurity news (`categories: it,news`, `lang: en`, `time_range: week`) and **auto-reads the top 2 full articles**. |
+| `search_tech_docs` | `tech_docs` | Searches `github.com`, `stackoverflow.com`, and `home-assistant.io` docs/community (`categories: it,general`) and **auto-reads the top 2 pages**. |
+| `web_search` | *(ad-hoc)* | General SearXNG web search (also accepts `preset="<alias>"` and `fetch_top_n`). |
+| `fetch_url` | *(reader)* | Extracts readable plain text from any URL. |
 
-### OpenWebUI / AnythingLLM / n8n / Claude / Cursor
-Point any MCP client supporting Streamable HTTP or SSE directly to:
-```text
-http://HOME_ASSISTANT_IP:8889/mcp
+### Adding Your Own Presets (Home Assistant UI or `/config/presets.yml`)
+You can add as many aliases as you like in the add-on **Configuration** tab under `search_presets`, or edit `/addon_configs/<repo>_searxng/presets.yml`:
+
+```yaml
+presets:
+  - alias: "local_news"
+    description: "Search local Vojvodina and Subotica news in Hungarian (Pannon RTV). Automatically extracts the full text of the top 3 news articles."
+    sites:
+      - "pannonrtv.com"
+      - "pannonrtv.rs"
+    default_query: "hírek vajdaság szabadka"
+    categories: "general,news"
+    language: "hu"
+    time_range: "week"
+    max_results: 6
+    fetch_top_n: 3
 ```
-or
-```text
-http://HOME_ASSISTANT_IP:8889/sse
-```
-
----
-
-## How to Configure SearXNG Globally
-
-### 1. Via the Home Assistant Add-on Configuration Tab
-- `mcp_enabled`: Enable/disable the built-in MCP server on port `8889` (default: `true`).
-- `mcp_max_results`: Default number of search results returned to the LLM (default: `8`).
-- `default_lang`: Default search result language for all browsers and LLM tool calls (e.g. `auto`, `all`, `en`, `hu`, `de`).
-- `default_locale`: Default web UI language (e.g. `en`, `hu`, `de`).
-- `autocomplete`: `duckduckgo`, `google`, `brave`, `startpage`, `wikipedia`, `none`, etc.
-- `safe_search`: `0` (None), `1` (Moderate), `2` (Strict).
-- `theme_style`: `auto`, `light`, `dark`, `black`.
-- `enabled_engines` / `disabled_engines`: Lists of engine names (e.g., `google`, `duckduckgo`, `brave`, `bing`) to enable or disable server-wide.
-
-### 2. Via Persistent `settings.yml`
-You can also edit `/addon_configs/<repo>_searxng/settings.yml` directly via File Editor, Studio Code Server, or Samba. Your custom edits are preserved across restarts.
